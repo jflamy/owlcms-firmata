@@ -58,7 +58,7 @@ public final class Main {
 		}
 		ResourceWalker.checkForLocalOverrideDirectory(() -> populateLocalDirectory());
 		MQTTConfig.getCurrent().readSettings();
-		
+
 		var vaadinBoot = new VaadinBoot() {
 			@Override
 			public void run() throws Exception {
@@ -167,8 +167,11 @@ public final class Main {
 			        .filter(r -> !r.getFileName().endsWith("Pinout.xlsx"))
 			        .forEach(r -> {
 				        try {
-					        FileUtils.copyInputStreamToFile(r.getStream(),
-					                new File(Main.deviceConfigs + "/" + r.getFilePath().getFileName()));
+					        File destination = new File(Main.deviceConfigs + "/" + r.getFilePath().getFileName());
+					        if (!destination.exists()) {
+					        	// do not overwrite
+						        FileUtils.copyInputStreamToFile(r.getStream(), destination);
+					        }
 				        } catch (IOException e) {
 					        LoggerUtils.logError(logger, e);
 				        }
@@ -176,11 +179,11 @@ public final class Main {
 		} else {
 			// Kept as defensive measure. Reading from jar should always work if ResourceWalker
 			// checks for an existing resource inside the jar.
-			
+
 			// Windows jpackage is not finding the jar on the classpath, use the app/devices folder
 			File installDir = new File("app/devices").getAbsoluteFile();
 			if (installDir.exists()) {
-				logger.info("copying files from installation folder {}",installDir);
+				logger.info("copying files from installation folder {}", installDir);
 				try {
 					FileUtils.copyDirectory(installDir, overrideDir);
 					new File(overrideDir, "EthernetPinout.xlsx").delete();
