@@ -38,7 +38,7 @@ public class OutputEventHandler {
 	public void handle(String topic, String messageStr, RefDevice board) {
 		getDefinitions().stream().filter(d1 -> matchTopic(topic, d1)
 		        && (d1.message == null || d1.message.isBlank() || d1.message.trim().contentEquals(messageStr.trim())))
-		        .peek(d1 -> logger.warn("======== {} {}", d1.topic, topic))
+		        //.peek(d1 -> logger.debug("======== {} {}", d1.topic, topic))
 		        .forEach(d -> {
 			        doPin(d, board);
 		        });
