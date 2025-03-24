@@ -226,7 +226,7 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 //	}
 
 	private void detectDevices(UI ui) {
-		logger.warn("detectDevices {} {}",ui, LoggerUtils.stackTrace());
+		logger.debug("detectDevices {} {}",ui, LoggerUtils.stackTrace());
 		List<SerialPort> serialPorts = MQTTConfig.getCurrent().getSerialPorts();
 		ui.access(() -> {
 			deviceDetectionWait.setVisible(true);
@@ -236,10 +236,10 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		});
 		MQTTConfig.getCurrent().buildPortToFirmwareMap(
 				step -> {
-					logger.warn("stepA {} {}",step, ui);
+					logger.debug("stepA {} {}",step, ui);
 					ui.access(() -> {
 						float value = ((float) step) / (serialPorts.size() + 1);
-						logger.warn("stepB {} {}",value, ui);
+						logger.debug("stepB {} {}",value, ui);
 						deviceDetectionProgress.setValue(value);
 					});	        
 				});

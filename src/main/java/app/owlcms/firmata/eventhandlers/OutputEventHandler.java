@@ -64,9 +64,13 @@ public class OutputEventHandler {
 						board.pinSetValue(pin, 0L);
 					}
 					case "ON" -> {
-						FlashDoer doer = board.doFlash(pin, d.parameters, "ON");
-						board.pinSetValue(pin, 0L);
-						board.cleanInterruptibles(doer);
+						if (d.parameters != null && d.parameters.isBlank()) {
+							board.pinSetValue(pin, 1L);
+						} else {
+							FlashDoer doer = board.doFlash(pin, d.parameters, "ON");
+							board.pinSetValue(pin, 0L);
+							board.cleanInterruptibles(doer);
+						}
 					}
 					case "FLASH" -> {
 						FlashDoer doer = board.doFlash(pin, d.parameters, "FLASH");

@@ -10,8 +10,8 @@ import org.firmata4j.firmata.FirmataDevice;
 import org.firmata4j.transport.JSerialCommTransport;
 import org.slf4j.LoggerFactory;
 
-import app.owlcms.firmata.data.MQTTConfig;
 import app.owlcms.firmata.data.DeviceConfig;
+import app.owlcms.firmata.data.MQTTConfig;
 import app.owlcms.firmata.mqtt.FopMQTTMonitor;
 import app.owlcms.firmata.refdevice.EventListener;
 import app.owlcms.firmata.refdevice.RefDevice;
@@ -70,6 +70,7 @@ public class FirmataService {
 
 			FopMQTTMonitor mqtt = new FopMQTTMonitor(fopName, outputEventHandler, getBoard(), config);
 			outputEventHandler.handle("fop/startup", "", board2);
+
 			device.addEventListener(new EventListener(inputEventHandler, mqtt, getBoard()));
 			confirmationCallback.run();
 		} catch (Exception e) {

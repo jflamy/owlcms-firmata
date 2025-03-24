@@ -237,7 +237,7 @@ public class MQTTConfig {
 			FirmataDevice device = null;
 			try {
 				String systemPortName = sp.getSystemPortName();
-				logger.warn("sp {}", systemPortName);
+				logger.debug("sp {}", systemPortName);
 				device = new FirmataDevice(new JSerialCommTransport(systemPortName));
 				device.ensureInitializationIsDone();
 				String firmware = device.getFirmware();
