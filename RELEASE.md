@@ -1,5 +1,6 @@
 ##### Changes since 2.0.0
 
+- 2.2.0: pin outputs with "ON" but no duration were not working. (These are needed for full jury panel)
 - 2.1.1: Do not overwrite files on startup, to work with firmata-controlpanel 0.9.1 simplified updating.
 - 2.1.0: fix to work with version 55.3
 - 2.0.8: work with a control panel similar to that of owlcms
