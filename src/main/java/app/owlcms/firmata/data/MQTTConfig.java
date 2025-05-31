@@ -26,7 +26,6 @@ import com.google.common.eventbus.EventBus;
 
 import app.owlcms.firmata.mqtt.ConfigMQTTMonitor;
 import app.owlcms.firmata.ui.FirmataService;
-import app.owlcms.firmata.ui.UIEvent;
 import app.owlcms.firmata.utils.LoggerUtils;
 import app.owlcms.utils.ResourceWalker;
 import ch.qos.logback.classic.Logger;
@@ -48,7 +47,10 @@ public class MQTTConfig {
 	private Map<String, String> portToFirmware;
 	private AsyncEventBus uiEventBus;
 	private List<FirmataService> services;
-	
+
+	// Add a field to store platforms for later use
+	private List<String> availablePlatforms = new ArrayList<>();
+
 	public static MQTTConfig getCurrent() {
 		if (current == null) {
 			current = new MQTTConfig();
@@ -64,6 +66,7 @@ public class MQTTConfig {
 		this.fops = new ArrayList<>();
 		this.portToConfig = new TreeMap<>();
 		this.services = new ArrayList<>();
+		this.portToFirmware = new ConcurrentSkipListMap<>(); // Initialize to avoid NPE
 	}
 
 	public String getFop() {
@@ -172,11 +175,18 @@ public class MQTTConfig {
 	}
 	
 	public Map<String, String> getPortToFirmware() {
+		if (portToFirmware == null) {
+			portToFirmware = new ConcurrentSkipListMap<>();
+		}
 		return portToFirmware;
 	}
 
-	public void setPortToFirmare(Map<String, String> portToFirmare) {
-		this.portToFirmware = portToFirmare;
+	public void setPortToFirmware(Map<String, String> portToFirmware) {
+		if (portToFirmware == null) {
+			this.portToFirmware = new ConcurrentSkipListMap<>();
+		} else {
+			this.portToFirmware = portToFirmware;
+		}
 	}
 
 	public boolean connectedNoPlatform() {
@@ -192,31 +202,49 @@ public class MQTTConfig {
 		Path devicesDir = ResourceWalker.getLocalDirPath();
 		Path settings = devicesDir.resolve("settings.properties");
 		Properties props = new Properties();
+		
+		// Only persist MQTT connection details and platform selection
+		// Do not save device list - that's detected at runtime
 		props.put("mqttServer", mqttServer);
 		props.put("mqttPort", mqttPort);
 		props.put("mqttUsername", mqttUsername);
+		
+		// Add platform (fop) to saved settings
+		if (fop != null) {
+			props.put("fop", fop);
+		}
+		
 		try {
-			props.store(Files.newOutputStream(settings, StandardOpenOption.CREATE, StandardOpenOption.WRITE),"owlcms server connection information");
+			props.store(Files.newOutputStream(settings, StandardOpenOption.CREATE, StandardOpenOption.WRITE),
+					"owlcms server connection information");
 		} catch (IOException e) {
-			logger.error("cannot store settings {}",e.getMessage());
+			logger.error("cannot store settings {}", e.getMessage());
 		}
 	}
-	
+
 	public void readSettings() {
 		Path devicesDir = ResourceWalker.getLocalDirPath();
 		Path settings = devicesDir.resolve("settings.properties");
 		try {
 			Properties props = new Properties();
 			props.load(Files.newInputStream(settings, StandardOpenOption.READ));
+			
+			// Load only MQTT connection details and platform selection
 			String p = (String) props.get("mqttServer");
 			mqttServer = p != null ? p : mqttServer;
 			p = (String) props.get("mqttPort");
 			mqttPort = p != null ? p : mqttPort;
 			p = (String) props.get("mqttUsername");
 			mqttUsername = p != null ? p : mqttUsername;
+			// Load platform (fop) from settings
+			fop = (String) props.get("fop");
+			logger.info("Read platform from settings: {}", fop);
 		} catch (IOException e) {
-			logger./**/warn("cannot read settings {}",e.getMessage());
+			logger.warn("cannot read settings {}", e.getMessage());
 		}
+		
+		// Device configs are intentionally not loaded from settings
+		// They will be discovered dynamically at runtime
 	}
 
 
@@ -233,19 +261,41 @@ public class MQTTConfig {
 		portToFirmware = new ConcurrentSkipListMap<>();
 		int i = 1;
 		progressUpdate.accept(1);
-		for (SerialPort sp : getSerialPorts()) {
+		
+		List<SerialPort> serialPorts = getSerialPorts();
+		logger.info("Starting firmware detection on {} ports", serialPorts.size());
+		
+		for (SerialPort sp : serialPorts) {
 			FirmataDevice device = null;
 			try {
 				String systemPortName = sp.getSystemPortName();
-				logger.debug("sp {}", systemPortName);
+				logger.debug("Checking port: {}", systemPortName);
+				
+				// Set up device with proper transport
 				device = new FirmataDevice(new JSerialCommTransport(systemPortName));
-				device.ensureInitializationIsDone();
-				String firmware = device.getFirmware();
-				firmware = firmware.replace(".ino", "");
-				portToFirmware.put(systemPortName, firmware);
-				progressUpdate.accept(++i);
+				
+				// Start device with timeout
+				long startTime = System.currentTimeMillis();
+				device.start();
+				logger.debug("Device start initiated on port {}", systemPortName);
+				
+				// Use ensureInitializationIsDone without timeout (already handled internally)
+				try {
+					device.ensureInitializationIsDone();
+					logger.debug("Device initialization complete on port {}", systemPortName);
+					
+					String firmware = device.getFirmware();
+					firmware = firmware.replace(".ino", "");
+					logger.info("Found firmware '{}' on port {} (took {}ms)", 
+							firmware, systemPortName, System.currentTimeMillis() - startTime);
+					portToFirmware.put(systemPortName, firmware);
+				} catch (Exception e) {
+					logger.debug("Device initialization failed on port {}: {}", 
+						systemPortName, e.getMessage());
+				}
 			} catch (Exception e) {
-				LoggerUtils.logError(logger, e);
+				logger.debug("Could not detect firmware on port {}: {}", 
+					sp.getSystemPortName(), e.getMessage());
 			} finally {
 				try {
 					if (device != null) {
@@ -254,10 +304,42 @@ public class MQTTConfig {
 				} catch (IOException e1) {
 					LoggerUtils.logError(logger, e1);
 				}
+				progressUpdate.accept(++i);
 			}
 		}
-		uiEventBus.post(new UIEvent.ConfigsUpdated());
+		
+		logger.info("Completed firmware detection, found {} devices", portToFirmware.size());
 		return portToFirmware;
 	}
 
+	// Fix the debugSaveSettings method
+	public void debugSaveSettings() {
+		logger.info("DEBUG: Saving config - current FOP value: {}", getFop());
+		saveSettings();
+		
+		// Read back from file to verify
+		Path devicesDir = ResourceWalker.getLocalDirPath();
+		Path settings = devicesDir.resolve("settings.properties");
+		try {
+			Properties debugProps = new Properties();
+			debugProps.load(Files.newInputStream(settings, StandardOpenOption.READ));
+			logger.info("DEBUG: After save - FOP value from Properties: {}", debugProps.getProperty("fop"));
+		} catch (IOException e) {
+			logger.error("DEBUG: Error reading saved properties: {}", e.getMessage());
+		}
+	}
+
+	// Getter method
+	public List<String> getAvailablePlatforms() {
+		return availablePlatforms;
+	}
+
+	// Setter method
+	public void setAvailablePlatforms(List<String> platforms) {
+		this.availablePlatforms = platforms;
+		// Also update the fops list if it's empty
+		if (fops == null || fops.isEmpty()) {
+			fops = platforms;
+		}
+	}
 }

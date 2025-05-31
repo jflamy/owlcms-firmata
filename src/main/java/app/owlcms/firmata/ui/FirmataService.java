@@ -27,12 +27,17 @@ public class FirmataService {
 	private RefDevice board;
 	private String serialPort;
 	private DeviceConfig config;
+	private boolean running = false;
 
 	public FirmataService(DeviceConfig config, Runnable confirmationCallback, Consumer<Throwable> errorCallback) {
 		this.confirmationCallback = confirmationCallback;
 		this.errorCallback = errorCallback;
 		this.config = config;
 		logger.setLevel(Level.DEBUG);
+	}
+
+	public boolean isRunning() {
+		return running;
 	}
 
 	public void startDevice() throws Throwable {
@@ -44,6 +49,7 @@ public class FirmataService {
 
 		Thread t1 = new Thread(() -> firmataThread(platform, serialPort, is));
 		t1.start();
+		running = true;
 	}
 
 	private void firmataThread(String fopName, String serialPort, InputStream is) {
@@ -91,6 +97,7 @@ public class FirmataService {
 		if (getBoard() != null) {
 			logger.info("closing device {}", serialPort);
 			getBoard().stop();
+			running = false;
 			if (confirmation != null) {
 				confirmation.run();
 			}

@@ -4,7 +4,7 @@ public class TimingTest {
 
 	private static final int NB_TIMES = 999;
 
-	public static void main(String[] args) {
+	public static void mainX(String[] args) {
 		long[] times = new long[NB_TIMES];
 
 		for (int i = 0; i < NB_TIMES; i++) {
