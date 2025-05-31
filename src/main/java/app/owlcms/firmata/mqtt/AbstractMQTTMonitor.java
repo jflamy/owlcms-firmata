@@ -16,7 +16,7 @@ import org.eclipse.paho.client.mqttv3.MqttSecurityException;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.slf4j.LoggerFactory;
 
-import app.owlcms.firmata.data.MQTTConfig;
+import app.owlcms.firmata.data.MQTTConfig;  // Update import to use data package version
 import app.owlcms.firmata.ui.Main;
 import ch.qos.logback.classic.Logger;
 

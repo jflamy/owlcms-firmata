@@ -231,7 +231,9 @@ public class MQTTConfig {
 			
 			// Load only MQTT connection details and platform selection
 			String p = (String) props.get("mqttServer");
+			String oldServer = mqttServer;  // store previous value
 			mqttServer = p != null ? p : mqttServer;
+			logger.error("MQTT Server address changed from '{}' to '{}'", oldServer, mqttServer);  // using ERROR to ensure visibility
 			p = (String) props.get("mqttPort");
 			mqttPort = p != null ? p : mqttPort;
 			p = (String) props.get("mqttUsername");

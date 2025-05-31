@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.TreeMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -61,6 +62,8 @@ import app.owlcms.firmata.utils.LoggerUtils;
 import app.owlcms.utils.Resource;
 import app.owlcms.utils.ResourceWalker;
 import ch.qos.logback.classic.Logger;
+import app.owlcms.firmata.ui.events.UIEvent;
+import java.util.Objects;
 
 @PreserveOnRefresh
 @Route("")
@@ -84,17 +87,16 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 	private Div platformDiv = new Div();
 	private Button connectButton;
 	private Button disconnectButton;
-
 	private boolean connectionAttemptInProgress = false;
 
 	// Map to store device UI components for each port/device
 	private Map<String, DeviceUIComponents> deviceUIComponentsMap = new HashMap<>();
-	
+
 	// Class to store UI components for each device
 	private static class DeviceUIComponents {
 		Button startButton;
 		Button stopButton;
-		
+
 		public DeviceUIComponents(Button startButton, Button stopButton) {
 			this.startButton = startButton;
 			this.stopButton = stopButton;
@@ -117,16 +119,16 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 
 		// Create warning messages for later use
 		createMessages();
-		
+
 		// Create and show the server connection UI first
 		showServerConfig();
-		
+
 		// Try to connect to server directly - this will trigger platform updates through events
 		autoConnectOrScan();
-		
+
 		// Create UI for platform selection and device display (data will be populated via events)
 		showPlatformSelection();
-		
+
 		// Show device section UI but don't start detection yet - it will happen after platform is selected
 		showDeviceSectionUI();
 	}
@@ -144,7 +146,7 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 			logger.info("Connection attempt already in progress, skipping");
 			return;
 		}
-		
+
 		connectionAttemptInProgress = true;
 		try {
 			configMonitor.quickCheckConnection();
@@ -163,88 +165,104 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		} catch (Exception e) {
 			// 1. Try configured address first
 			String server = MQTTConfig.getCurrent().getMqttServer();
-			if (isMqttReachable(server, MQTTConfig.getCurrent().getMqttPort())) {
-				logger.warn("MQTT server reachable at configured address: {}", server);
-				UI ui = UI.getCurrent();
-				if (ui != null) {
-					ui.access(() -> handleMQTTConnection());
-				}
-				return;
+			tryConnectionSequence(server);
+		}
+	}
+
+	private void tryConnectionSequence(String server) {
+		// 1. Try direct connection to given address
+		if (isMqttReachable(server, MQTTConfig.getCurrent().getMqttPort())) {
+			logger.warn("MQTT server reachable at configured address: {}", server);
+			UI ui = UI.getCurrent();
+			if (ui != null) {
+				ui.access(() -> handleMQTTConnection());
 			}
-			// 2. Try localhost
-			if (isMqttReachable("127.0.0.1", MQTTConfig.getCurrent().getMqttPort())) {
-				logger.warn("MQTT server reachable at localhost");
+			return;
+		}
+
+		// 2. Try localhost if different from given address
+		if (!"127.0.0.1".equals(server) && isMqttReachable("127.0.0.1", MQTTConfig.getCurrent().getMqttPort())) {
+			logger.warn("MQTT server reachable at localhost");
+			UI ui = UI.getCurrent();
+			if (ui != null) {
+				ui.access(() -> {
+					MQTTConfig.getCurrent().setMqttServer("127.0.0.1");
+					handleMQTTConnection();
+				});
+			}
+			return;
+		}
+
+		// 3. If not reachable, try scanning if network is small
+		final String subnetToScan = getActiveNetworkSubnet();
+		final String subnet = subnetToScan != null ? subnetToScan : getSubnet(server);
+
+		if (subnet != null && subnet.endsWith(".")) {
+			// Check subnet size before attempting scan
+			int hostCount = getSubnetHostCount(subnet);
+			if (hostCount > 256) {
+				logger.warn("Network too large for scanning: {} hosts", hostCount);
 				UI ui = UI.getCurrent();
 				if (ui != null) {
 					ui.access(() -> {
-						MQTTConfig.getCurrent().setMqttServer("127.0.0.1");
-						handleMQTTConnection();
+						Notification.show(
+							"Network too large for automatic scanning. Please enter server address manually.",
+							3000, Position.TOP_END)
+							.addThemeVariants(NotificationVariant.LUMO_ERROR);
 					});
 				}
 				return;
 			}
-			// 3. If not reachable, try scanning if network is small
-			String subnet = getSubnet(server);
-			int hostCount = getSubnetHostCount(server);
-			if (subnet != null && subnet.endsWith(".")) {
-				if (hostCount > 0 && hostCount <= 256) {
-					logger.warn("Scanning for MQTT server on subnet {} (host count: {})", subnet, hostCount);
-					UI ui = UI.getCurrent();
-					if (ui != null) {
-						ui.access(() -> {
-							Notification.show("Scanning for MQTT server on subnet " + subnet, 2000, Position.MIDDLE);
+
+			logger.warn("Scanning for MQTT server on active network subnet {} (host count: {})", subnet, hostCount);
+			UI ui = UI.getCurrent();
+			if (ui != null) {
+				ui.access(() -> {
+					Notification.show("Scanning for MQTT server on subnet " + subnet,
+					        2000, Position.TOP_END);
+				});
+			}
+			String found = scanForMQTTServer(subnet, MQTTConfig.getCurrent().getMqttPort(), 50);
+			if (found != null) {
+				UI ui2 = UI.getCurrent();
+				if (ui2 != null) {
+					ui2.access(() -> {
+						// Ask user for confirmation before changing config
+						ConfirmDialog dialog = new ConfirmDialog();
+						dialog.setHeader("MQTT Server Found");
+						dialog.setText("Could not connect to " + server + ". A MQTT server was found at "
+						        + found + ". Do you want to update the configuration and connect?");
+						dialog.setCancelable(true);
+						dialog.setConfirmText("Yes");
+						dialog.setCancelText("No");
+						dialog.addConfirmListener(event -> {
+							MQTTConfig.getCurrent().setMqttServer(found);
+							mqttServerField.setValue(found); // Update the UI field
+							handleMQTTConnection(); // Retry connection with new address
+							MQTTConfig.getCurrent().saveSettings();
 						});
-					}
-					String found = scanForMQTTServer(subnet, MQTTConfig.getCurrent().getMqttPort(), 50);
-					if (found != null) {
-						UI ui2 = UI.getCurrent();
-						if (ui2 != null) {
-							ui2.access(() -> {
-								// Ask user for confirmation before changing config
-								ConfirmDialog dialog = new ConfirmDialog();
-								dialog.setHeader("MQTT Server Found");
-								dialog.setText("A MQTT server was found at " + found + ". Do you want to update the configuration and connect?");
-								dialog.setCancelable(true);
-								dialog.setConfirmText("Yes");
-								dialog.setCancelText("No");
-								dialog.addConfirmListener(event -> {
-									MQTTConfig.getCurrent().setMqttServer(found);
-									// Call the connection handler directly
-									handleMQTTConnection();
-									MQTTConfig.getCurrent().saveSettings();
-								});
-								dialog.open();
-							});
-						}
-					} else {
-						logger.warn("No MQTT server found on subnet {}", subnet);
-						UI ui2 = UI.getCurrent();
-						if (ui2 != null) {
-							ui2.access(() -> {
-								Notification.show("No MQTT server found on subnet " + subnet, 3000, Position.MIDDLE)
-								        .addThemeVariants(NotificationVariant.LUMO_ERROR);
-							});
-						}
-					}
-				} else {
-					logger.warn("Not scanning for MQTT server: subnet too large (host count: {})", hostCount);
-					UI ui = UI.getCurrent();
-					if (ui != null) {
-						ui.access(() -> {
-							Notification.show("Not scanning for MQTT server: subnet too large (" + hostCount + " hosts)", 3000, Position.MIDDLE)
-							        .addThemeVariants(NotificationVariant.LUMO_ERROR);
-						});
-					}
+						dialog.open();
+					});
 				}
 			} else {
-				logger.warn("Not scanning for MQTT server: unable to determine subnet from '{}'", server);
-				UI ui = UI.getCurrent();
-				if (ui != null) {
-					ui.access(() -> {
-						Notification.show("Not scanning for MQTT server: unable to determine subnet", 3000, Position.MIDDLE)
+				logger.warn("No MQTT server found on subnet {}", subnet);
+				UI ui2 = UI.getCurrent();
+				if (ui2 != null) {
+					ui2.access(() -> {
+						Notification.show("No MQTT server found on subnet " + subnet, 3000, Position.TOP_END)
 						        .addThemeVariants(NotificationVariant.LUMO_ERROR);
 					});
 				}
+			}
+		} else {
+			logger.warn("Not scanning for MQTT server: unable to determine subnet from '{}'", server);
+			UI ui = UI.getCurrent();
+			if (ui != null) {
+				ui.access(() -> {
+					Notification.show("Not scanning for MQTT server: unable to determine subnet",
+					        3000, Position.TOP_END)
+					        .addThemeVariants(NotificationVariant.LUMO_ERROR);
+				});
 			}
 		}
 	}
@@ -253,21 +271,66 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 	private String getSubnet(String ip) {
 		if (ip == null)
 			return null;
-		String[] parts = ip.split("\\.");
-		if (parts.length == 4) {
-			return parts[0] + "." + parts[1] + "." + parts[2] + ".";
+		try {
+			String[] parts = ip.split("\\.");
+			if (parts.length == 4) {
+				return parts[0] + "." + parts[1] + "." + parts[2] + ".";
+			}
+		} catch (Exception e) {
+			logger.debug("Could not parse IP address: {}", ip);
 		}
 		return null;
 	}
 
-	// Helper: estimate host count for /24 subnet
-	private int getSubnetHostCount(String ip) {
-		// Only handle IPv4 /24
-		String[] parts = ip.split("\\.");
-		if (parts.length == 4) {
-			return 256;
+	// Helper: get active network subnet
+	private String getActiveNetworkSubnet() {
+		try {
+			// Get all network interfaces
+			for (java.net.NetworkInterface iface : java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces())) {
+				// Skip loopback, inactive, virtual interfaces etc
+				if (iface.isLoopback() || !iface.isUp() || iface.isVirtual() || iface.isPointToPoint()) {
+					continue;
+				}
+
+				// Look for IPv4 addresses
+				for (java.net.InterfaceAddress addr : iface.getInterfaceAddresses()) {
+					java.net.InetAddress inetAddr = addr.getAddress();
+					if (inetAddr instanceof java.net.Inet4Address) {
+						String hostAddress = inetAddr.getHostAddress();
+						logger.info("Found active network interface: {} with address: {}",
+						        iface.getDisplayName(), hostAddress);
+						return getSubnet(hostAddress);
+					}
+				}
+			}
+		} catch (Exception e) {
+			logger.error("Error determining network interface: {}", e.getMessage());
 		}
-		return -1;
+		return null;
+	}
+
+	// Helper: estimate host count for /24 subnet - changed to handle different subnet masks
+	private int getSubnetHostCount(String ip) {
+		if (ip == null) return -1;
+		try {
+			for (java.net.NetworkInterface iface : java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces())) {
+				for (java.net.InterfaceAddress addr : iface.getInterfaceAddresses()) {
+					java.net.InetAddress inetAddr = addr.getAddress();
+					if (inetAddr instanceof java.net.Inet4Address) {
+						String hostAddress = inetAddr.getHostAddress();
+						if (hostAddress.startsWith(ip.substring(0, ip.length()-1))) {
+							// Calculate hosts from network prefix length
+							short prefixLength = addr.getNetworkPrefixLength();
+							return (int) Math.pow(2, 32 - prefixLength);
+						}
+					}
+				}
+			}
+		} catch (Exception e) {
+			logger.debug("Error calculating subnet size: {}", e.getMessage());
+		}
+		// Default to /24 if we can't determine
+		return 256;
 	}
 
 	// Helper: scan subnet for MQTT server (returns first found IP or null)
@@ -331,80 +394,26 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		UI ui = UI.getCurrent();
 		if (ui != null) {
 			ui.access(() -> {
-				if (portsDiv == null) {
-					portsDiv = new Div();
-				}
-				portsDiv.removeAll();
+				// Update connection status messages only - don't rebuild device UI here
+				// since it's already been built in detectDevices
 				if (MQTTConfig.fullyConnected()) {
 					messageConnected();
 				} else if (MQTTConfig.getCurrent().connectedNoPlatform()) {
 					messageNoPlatform();
 				}
-				deviceDetectionWait.setVisible(false);
-				for (DeviceConfig dc : MQTTConfig.getCurrent().getPortToConfig().values()) {
-					showDeviceConfig(dc, MQTTConfig.getCurrent().getFop());
-				}
-			});
-		}
-	}
-
-	@Subscribe
-	public void eventPlatformsUpdate(UIEvent.PlatformsUpdated platformsUpdateEvent) {
-		logger.debug("Received PlatformsUpdated event: {}", System.identityHashCode(platformsUpdateEvent));
-		UI ui = UI.getCurrent();
-		if (ui != null) {
-			ui.access(() -> {
-				List<String> platforms = MQTTConfig.getCurrent().getFops();
-				String currentSavedPlatform = MQTTConfig.getCurrent().getFop();
-				logger.info("Received platforms update from server: {}, current saved platform: {}",
-						platforms, currentSavedPlatform);
 				
-				// Only update platforms UI if we have received platforms from server
-				if (platforms != null && !platforms.isEmpty()) {
-					updatePlatforms();
-					
-					// After platform update, see if we need to refresh devices
-					if (MQTTConfig.fullyConnected()) {
-						eventDeviceConfigs(new UIEvent.ConfigsUpdated());
-					}
-				} else {
-					logger.warn("No platforms received from server, skipping platform update");
-					
-					// Request configuration from server again if no platforms received
-					try {
-						configMonitor.publishMqttMessage("owlcms/config", "");
-						logger.info("Re-sent config request to server");
-					} catch (MqttException e) {
-						logger.error("Failed to request config from server: {}", e.getMessage());
-					}
-				}
+				logger.debug("ConfigsUpdated event processed, device count: {}", 
+					MQTTConfig.getCurrent().getPortToConfig().size());
 			});
 		}
 	}
 
-	private void addFormItemX(Component c, String string) {
-		var item = form.addFormItem(c, string);
-		item.getElement().getStyle().set("--vaadin-form-item-label-width", "10em");
-	}
-
-	private void confirmStartOk(UI ui, Button start, Button stop) {
-		ui.access(() -> {
-			// Notification.show("Device started", 2000, Position.MIDDLE);
-			start.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
-			stop.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
-			stop.setEnabled(true);
-			start.setEnabled(false); // Disable start button when device is running
-		});
-	}
-
-	private void confirmStopOk(UI ui, Button start, Button stop) {
-		ui.access(() -> {
-			// Notification.show("Device stopped", 2000, Position.MIDDLE);
-			stop.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
-			start.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
-			start.setEnabled(true); // Re-enable start button
-			stop.setEnabled(false); // Disable stop button
-		});
+	private void showNoDevicesMessage() {
+		Paragraph noDevices = new Paragraph(
+			"No devices detected. Please check your connections and try again.");
+		noDevices.getStyle().set("font-style", "italic");
+		portsDiv.add(noDevices);
+		logger.info("No devices were detected");
 	}
 
 	private void createMessages() {
@@ -474,108 +483,103 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 	private void detectDevices(UI ui, boolean showProgress) {
 		logger.debug("detectDevices {} showProgress={}", ui, showProgress);
 		List<SerialPort> serialPorts = MQTTConfig.getCurrent().getSerialPorts();
-		
+
 		logger.info("Starting device detection with {} ports", serialPorts.size());
-		
+
 		// Always show progress indicator when explicitly requested
 		if (showProgress) {
 			ui.access(() -> {
 				deviceDetectionWait.setVisible(true);
 				deviceDetectionProgress.setVisible(true);
-				deviceDetectionProgress.setIndeterminate(false); // Use determinate progress
-				deviceDetectionProgress.setValue(0); // Start at 0%
-				logger.debug("Progress indicator shown");
+				deviceDetectionProgress.setIndeterminate(false);
+				deviceDetectionProgress.setValue(0);
+				// Clear any existing "no devices" message while detecting
+				portsDiv.removeAll();
+				logger.debug("Progress indicator shown, cleared existing UI");
 			});
 		}
-		
+
 		// Clear existing device mapping
 		MQTTConfig.getCurrent().getPortToConfig().clear();
 		MQTTConfig.getCurrent().getPortToFirmware().clear();
 		logger.debug("Cleared existing device configs");
-		
+
 		try {
 			// Build port to firmware map - this does the actual device detection
 			logger.info("Starting buildPortToFirmwareMap");
-			MQTTConfig.getCurrent().buildPortToFirmwareMap(
+			Map<String, String> detectedFirmware = MQTTConfig.getCurrent().buildPortToFirmwareMap(
 					step -> {
-						logger.debug("Detection progress: step {} of {}", step, serialPorts.size() + 1);
-						if (showProgress) {
-							// Calculate progress value with proper bounds
-							float value = serialPorts.isEmpty() ? 1.0f : ((float) step) / (serialPorts.size() + 1);
-							value = Math.max(0, Math.min(1.0f, value)); // Ensure the value is between 0 and 1
-							final float finalValue = value;
-							
-							ui.access(() -> {
-								deviceDetectionProgress.setValue(finalValue);
-							});
-						}
-					});
-			logger.info("Completed buildPortToFirmwareMap");
+				        logger.debug("Detection progress: step {} of {}", step, serialPorts.size() + 1);
+				        if (showProgress) {
+					        // Calculate progress value with proper bounds
+					        float value = serialPorts.isEmpty() ? 1.0f : ((float) step) / (serialPorts.size() + 1);
+					        value = Math.max(0, Math.min(1.0f, value));
+					        final float finalValue = value;
+
+					        ui.access(() -> {
+						        deviceDetectionProgress.setValue(finalValue);
+					        });
+				        }
+			        });
 			
-			// Store detected device configs
-			for (Entry<String, String> pf : MQTTConfig.getCurrent().getPortToFirmware().entrySet()) {
-				logger.debug("Detected device: port={}, type={}", pf.getKey(), pf.getValue());
-				MQTTConfig.getCurrent().getPortToConfig().put(pf.getKey(), new DeviceConfig(pf.getKey(), pf.getValue()));
+			// Create new TreeMap for atomic update
+			TreeMap<String, DeviceConfig> newDeviceConfigs = new TreeMap<>();
+			
+			// Build new device configs from detected firmware
+			for (Entry<String, String> pf : detectedFirmware.entrySet()) {
+				logger.info("Detected device: port={}, type={}", pf.getKey(), pf.getValue());
+				newDeviceConfigs.put(pf.getKey(), 
+						new DeviceConfig(pf.getKey(), pf.getValue()));
 			}
 			
-			logger.info("Device detection complete. Found {} devices", 
-					MQTTConfig.getCurrent().getPortToFirmware().size());
-			
-			// Update the UI with detected devices
-			updateDeviceUI(ui);
+			// Atomic update of device configs
+			synchronized (MQTTConfig.getCurrent().getPortToConfig()) {
+				MQTTConfig.getCurrent().getPortToConfig().clear();
+				MQTTConfig.getCurrent().getPortToConfig().putAll(newDeviceConfigs);
+			}
+
+			logger.info("Device detection complete. Found {} devices", newDeviceConfigs.size());
+
+			// Update UI immediately in this thread to ensure proper sequencing
+			ui.access(() -> {
+				logger.debug("Hiding progress indicator and updating UI with detected devices");
+				deviceDetectionWait.setVisible(false);
+				
+				// Force immediate UI update
+				portsDiv.removeAll();
+				deviceUIComponentsMap.clear();
+				
+				if (newDeviceConfigs.isEmpty()) {
+					showNoDevicesMessage();
+				} else {
+					// Show devices directly here to ensure they're displayed
+					for (DeviceConfig dc : newDeviceConfigs.values()) {
+						showDeviceConfig(dc, MQTTConfig.getCurrent().getFop());
+					}
+					logger.info("Displayed {} devices in UI", newDeviceConfigs.size());
+					
+					// Auto-start devices when fully connected
+					if (MQTTConfig.fullyConnected()) {
+						autoStartDevices(ui);
+					}
+				}
+				
+				// Post the event after UI is updated
+				MQTTConfig.getCurrent().getUiEventBus().post(new UIEvent.ConfigsUpdated());
+			});
+
 		} catch (Exception e) {
 			logger.error("Error during device detection: {}", e.getMessage(), e);
 			ui.access(() -> {
 				deviceDetectionWait.setVisible(false);
 				errorNotification("Device detection failed: " + e.getMessage());
+				// Show "no devices" message after failed detection
+				if (portsDiv != null) {
+					portsDiv.removeAll();
+					showNoDevicesMessage();
+				}
 			});
 		}
-	}
-
-	private void updateDeviceUI(UI ui) {
-		ui.access(() -> {
-			// Make sure component map is cleared before adding new components
-			deviceUIComponentsMap.clear();
-			
-			// Clear out the ports display
-			if (portsDiv == null) {
-				portsDiv = new Div();
-				devicesDiv.add(portsDiv);
-			}
-			portsDiv.removeAll();
-			
-			// Get the in-memory list of detected devices
-			Map<String, DeviceConfig> deviceConfigs = MQTTConfig.getCurrent().getPortToConfig();
-			
-			// Show detection results (or no devices message)
-			if (deviceConfigs.isEmpty()) {
-				Paragraph noDevices = new Paragraph("No devices detected. Please check your connections and try again.");
-				noDevices.getStyle().set("font-style", "italic");
-				portsDiv.add(noDevices);
-				logger.info("No devices were detected");
-			} else {
-				// Show each device in the UI
-				for (DeviceConfig dc : deviceConfigs.values()) {
-					showDeviceConfig(dc, MQTTConfig.getCurrent().getFop());
-				}
-				logger.info("Updated UI with {} detected devices", deviceConfigs.size());
-			}
-			
-			// Update messages and hide progress indicator
-			if (MQTTConfig.fullyConnected()) {
-				messageConnected();
-			} else if (MQTTConfig.getCurrent().connectedNoPlatform()) {
-				messageNoPlatform();
-			}
-			deviceDetectionWait.setVisible(false);
-			
-			// After UI is updated with devices, auto-start if fully connected
-			if (MQTTConfig.fullyConnected()) {
-				logger.info("Connected to server with platform '{}'. Auto-starting devices...", 
-					MQTTConfig.getCurrent().getFop());
-				autoStartDevices(ui);
-			}
-		});
 	}
 
 	private void errorNotification(String errorMessage) {
@@ -675,9 +679,9 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 
 		Button stop = new Button("Stop Device");
 		Button start = new Button("Start Device");
-		
+
 		// Store UI components for this device to allow auto-start to update UI
-		deviceUIComponentsMap.put(deviceConfig.getSerialPort(), 
+		deviceUIComponentsMap.put(deviceConfig.getSerialPort(),
 		        new DeviceUIComponents(start, stop));
 
 		configSelect = new ComboBox<Resource>();
@@ -690,26 +694,26 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		// only show xlsx
 		configSelect.setItems(resourceList.stream()
 		        .filter(r -> r.getFileName().endsWith(".xlsx")).collect(Collectors.toList()));
-		
+
 		// Check if the device type has a matching config file
 		Resource curResource = null;
 		if (deviceConfig.getDeviceTypeName() != null) {
 			curResource = resourceList.stream()
-					.filter(r -> r.getFileName().contentEquals(deviceConfig.getDeviceTypeName() + ".xlsx"))
-					.findFirst().orElse(null);
-					
+			        .filter(r -> r.getFileName().contentEquals(deviceConfig.getDeviceTypeName() + ".xlsx"))
+			        .findFirst().orElse(null);
+
 			// If found a config, store it directly in the device config
 			if (curResource != null) {
 				deviceConfig.setDevice(curResource.toString());
 			}
 		}
-		
+
 		configSelect.setValue(curResource);
 		if (MQTTConfig.fullyConnected()) {
 			boolean hasConfig = curResource != null;
-			boolean isRunning = deviceConfig.getFirmataService() != null && 
-					deviceConfig.getFirmataService().isRunning();
-			
+			boolean isRunning = deviceConfig.getFirmataService() != null &&
+			        deviceConfig.getFirmataService().isRunning();
+
 			if (isRunning) {
 				// Device is running
 				start.setEnabled(false);
@@ -792,18 +796,18 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 			}
 			deviceUIComponentsMap.clear();
 			MQTTConfig.getCurrent().closeAll();
-			
+
 			// Start detection with progress indicator visible
 			executor.submit(() -> detectDevices(ui, true));
 		});
-		
+
 		var deviceSelectionTitle = new HorizontalLayout(
 		        new H3("Devices"),
 		        scanButton,
 		        new Text("Configuration files are located in " + ResourceWalker.getLocalDirPath().toString()));
 		deviceSelectionTitle.setAlignItems(Alignment.BASELINE);
 		deviceSelectionTitle.getStyle().set("margin-top", SECTION_MARGIN_TOP);
-		
+
 		// Create progress indicator elements
 		deviceSelectionExplanation = new Html("""
 		                                      <div>Detecting connected devices. <b>Please wait.</b></div>
@@ -814,16 +818,16 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		deviceDetectionWait = new HorizontalLayout(deviceSelectionExplanation, deviceDetectionProgress);
 		deviceDetectionWait.setWidth("40em");
 		deviceDetectionWait.setVisible(false); // Initially hidden until detection starts
-		
+
 		// Create container divs
 		devicesDiv = new Div();
 		portsDiv = new Div();
-		
+
 		// Build the UI hierarchy
 		devicesDiv.add(deviceSelectionTitle, deviceDetectionWait, fullyConnectedWarning, portsDiv);
 		getAvailableConfigNames();
 		add(createSeparator(), devicesDiv);
-		
+
 		// Do not start automatic detection here
 	}
 
@@ -832,15 +836,17 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		var platformTitle = new H3("Platform");
 		platformTitle.getStyle().set("margin-top", SECTION_MARGIN_TOP);
 		platformDiv = new Div();
-		
+
 		// Create an empty platform field - will be populated when platforms are received
 		platformField = new ComboBox<String>();
 		platformField.setWidth("15em");
 		platformField.setPlaceholder("Please select a platform");
-		
+
 		platformDiv.add(platformSelectionWarning, platformField);
 		add(platformTitle, platformDiv);
 	}
+
+	private TextField mqttServerField; // Add field declaration
 
 	private void showServerConfig() {
 		connectButton = new Button("Connect");
@@ -876,7 +882,7 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		mqttConfigTitle.setAlignItems(Alignment.BASELINE);
 		mqttConfigTitle.getStyle().set("margin-top", "0.5em");
 
-		TextField mqttServerField = new TextField();
+		mqttServerField = new TextField(); // Initialize field
 		mqttServerField.setHelperText("Usually the address or name of the owlcms server");
 		mqttServerField.setValue(MQTTConfig.getCurrent().getMqttServer());
 		mqttServerField.addValueChangeListener(e -> MQTTConfig.getCurrent().setMqttServer(e.getValue()));
@@ -913,7 +919,7 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		this.add(form);
 
 		updateServerConfigFromFields(
-				mqttServerField, mqttPortField, mqttUsernameField, mqttPasswordField);
+		        mqttServerField, mqttPortField, mqttUsernameField, mqttPasswordField);
 	}
 
 	// Update the handleMQTTConnection method to better handle connection sequence
@@ -931,13 +937,21 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 				requestPlatformsWithRetry();
 				return;
 			}
-			
+
 			logger.info("Establishing new connection to MQTT server: {}", MQTTConfig.getCurrent().getMqttServer());
-			// Only establish connection if not already connected
-			configMonitor.quickCheckConnection();
-			configMonitor.start("config");
-			
-			// Update UI elements based on connection status
+			// Try direct connection first
+			try {
+				configMonitor.quickCheckConnection();
+				configMonitor.start("config");
+			} catch (Exception e) {
+				// Connection failed - fall back to scanning
+				logger.warn("Direct connection failed, falling back to scanning: {}", e.getMessage());
+				String server = MQTTConfig.getCurrent().getMqttServer();
+				tryConnectionSequence(server);
+				return;
+			}
+
+			// Update UI based on connection result
 			if (MQTTConfig.getCurrent().isConnected()) {
 				logger.info("Connection successful");
 				connectButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
@@ -950,7 +964,7 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 
 				// Use our retry method for reliable platform retrieval
 				requestPlatformsWithRetry();
-				
+
 				// Save connection settings
 				MQTTConfig.getCurrent().saveSettings();
 				logger.info("Config saved after successful connection");
@@ -961,7 +975,8 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 
 			// Trigger UI refresh for device configs
 			eventDeviceConfigs(new UIEvent.ConfigsUpdated());
-		} catch (NumberFormatException | IOException e1) {
+
+		} catch (Exception e1) {
 			messageConnectionError();
 			logger.error("Connection error: {}", e1.getMessage());
 		}
@@ -978,19 +993,19 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 				// Request configuration from the server
 				configMonitor.publishMqttMessage("owlcms/config", "");
 				logger.info("Sent config request to server (attempt {})", attempt + 1);
-				
+
 				// Wait a bit to allow response
 				Thread.sleep(500);
-				
+
 				// If platforms received, we can break out
 				List<String> platforms = MQTTConfig.getCurrent().getFops();
 				if (platforms != null && !platforms.isEmpty()) {
-					logger.info("Received platforms on attempt {}: {}", 
-						attempt + 1, platforms);
-					
+					logger.info("Received platforms on attempt {}: {}",
+					        attempt + 1, platforms);
+
 					// Store platforms for future use
 					MQTTConfig.getCurrent().setAvailablePlatforms(platforms);
-					
+
 					// Only update platform UI if it exists
 					UI ui = UI.getCurrent();
 					if (ui != null) {
@@ -1004,12 +1019,12 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 			} catch (MqttException | InterruptedException e) {
 				logger.error("Config request error (attempt {}): {}", attempt + 1, e.getMessage());
 			}
-			
+
 			logger.warn("No platforms received on attempt {}, will retry...", attempt + 1);
 		}
-		
+
 		logger.error("Failed to receive platforms after {} attempts", maxAttempts);
-		
+
 		// Even if no platforms were received, we should still proceed with device detection
 		UI ui = UI.getCurrent();
 		if (ui != null) {
@@ -1018,8 +1033,8 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 	}
 
 	private void updateServerConfigFromFields(
-			TextField mqttServerField, TextField mqttPortField, TextField mqttUsernameField,
-			PasswordField mqttPasswordField) {
+	        TextField mqttServerField, TextField mqttPortField, TextField mqttUsernameField,
+	        PasswordField mqttPasswordField) {
 		if (mqttServerField.getValue() != null) {
 			MQTTConfig.getCurrent().setMqttServer(mqttServerField.getValue());
 		}
@@ -1041,7 +1056,7 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		platformField = new ComboBox<String>();
 		platformField.setWidth("15em");
 		platformField.setPlaceholder("Please select a platform");
-		
+
 		// Get platforms either from the current connection or from stored values
 		List<String> serverPlatforms = MQTTConfig.getCurrent().getFops();
 		if (serverPlatforms == null || serverPlatforms.isEmpty()) {
@@ -1051,22 +1066,22 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		} else {
 			logger.info("Using platforms from server: {}", serverPlatforms);
 		}
-		
+
 		// Get saved platform
 		String savedPlatform = MQTTConfig.getCurrent().getFop();
 		logger.info("Previously saved platform: {}", savedPlatform);
-		
+
 		// Set dropdown items
 		platformField.setItems(serverPlatforms);
-		
+
 		// Set the dropdown value to match the saved platform if it exists in the server list
 		if (savedPlatform != null && !savedPlatform.isEmpty() && serverPlatforms.contains(savedPlatform)) {
 			platformField.setValue(savedPlatform);
 			logger.info("Set dropdown to saved platform: {}", savedPlatform);
-			
+
 			// Make sure the platform is properly set in the config
 			MQTTConfig.getCurrent().setFop(savedPlatform);
-			
+
 		} else if (serverPlatforms.size() == 1) {
 			// If only one platform is available, automatically select it
 			String singlePlatform = serverPlatforms.get(0);
@@ -1074,24 +1089,24 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 			MQTTConfig.getCurrent().setFop(singlePlatform);
 			logger.info("Auto-selected single available platform: {}", singlePlatform);
 			MQTTConfig.getCurrent().saveSettings();
-			
+
 		} else {
 			// Multiple platforms but no valid saved selection
-			platformField.setValue(null); 
+			platformField.setValue(null);
 			MQTTConfig.getCurrent().setFop(null);
 			logger.info("Multiple platforms available, user selection required");
 		}
-		
+
 		// Set up value change listener for platform selection changes
 		platformField.addValueChangeListener(e -> {
 			if (e.getValue() != null) {
 				String selectedPlatform = e.getValue();
 				String previousPlatform = MQTTConfig.getCurrent().getFop();
 				boolean platformChanged = previousPlatform == null || !selectedPlatform.equals(previousPlatform);
-				
+
 				logger.info("User selected platform '{}', setting in config", selectedPlatform);
 				MQTTConfig.getCurrent().setFop(selectedPlatform);
-				
+
 				// Force the property to be set immediately
 				try {
 					// Ensure we're saving correctly
@@ -1100,11 +1115,11 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 				} catch (Exception ex) {
 					logger.error("Error saving platform selection: {}", ex.getMessage(), ex);
 				}
-				
+
 				// If platform changed, reset all device services and restart
 				if (platformChanged) {
-					logger.info("Platform changed from '{}' to '{}', stopping all devices and re-initializing", 
-							previousPlatform, selectedPlatform);
+					logger.info("Platform changed from '{}' to '{}', stopping all devices and re-initializing",
+					        previousPlatform, selectedPlatform);
 					stopAllDevices();
 					// Start device detection with the new platform
 					startDeviceDetection();
@@ -1114,14 +1129,14 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 				logger.info("Platform selection cleared by user");
 				MQTTConfig.getCurrent().setFop(null);
 				MQTTConfig.getCurrent().saveSettings();
-				
+
 				// Stop all devices when platform is cleared
 				stopAllDevices();
 			}
 		});
-		
+
 		platformDiv.add(platformSelectionWarning, platformField);
-		
+
 		// Always update UI status based on connection
 		if (MQTTConfig.fullyConnected()) {
 			messageConnected();
@@ -1130,57 +1145,60 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		} else {
 			messageNotConnected();
 		}
-		
+
 		// After platforms are initialized, detect devices
 		startDeviceDetection();
 	}
 
 	// Ensure proper device detection and auto-start
 	private void startDeviceDetection() {
-	    UI ui = UI.getCurrent();
-	    if (ui != null) {
-	        logger.debug("Starting device detection after platform determination");
-	        
-	        try {
-	            // Show progress indicator
-	            ui.access(() -> {
-	                deviceDetectionWait.setVisible(true);
-	                deviceDetectionProgress.setVisible(true);
-	                deviceDetectionProgress.setIndeterminate(false);
-	                deviceDetectionProgress.setValue(0);
-	            });
-	            
-	            // Submit detection task
-	            executor.submit(new Runnable() {
-	                @Override
-	                public void run() {
-	                    try {
-	                        detectDevices(ui, true);
-	                    } catch (Throwable t) {
-	                        logger.error("Uncaught exception in device detection: {}", t.getMessage(), t);
-	                        ui.access(() -> {
-	                            deviceDetectionWait.setVisible(false);
-	                            errorNotification("Device detection failed: " + t.getMessage());
-	                        });
-	                    }
-	                }
-	            });
-	        } catch (Exception e) {
-	            logger.error("Failed to submit detection task: {}", e.getMessage(), e);
-	            ui.access(() -> errorNotification("Failed to start device detection: " + e.getMessage()));
-	        }
-	    } else {
-	        logger.error("Cannot start device detection: UI is null");
-	    }
+		UI ui = UI.getCurrent();
+		if (ui != null) {
+			logger.debug("Starting device detection after platform determination");
+
+			try {
+				// Show progress indicator
+				ui.access(() -> {
+					deviceDetectionWait.setVisible(true);
+					deviceDetectionProgress.setVisible(true);
+					deviceDetectionProgress.setIndeterminate(false);
+					deviceDetectionProgress.setValue(0);
+				});
+
+				// Submit detection task
+				executor.submit(new Runnable() {
+					@Override
+					public void run() {
+						try {
+							detectDevices(ui, true);
+						} catch (Throwable t) {
+							logger.error("Uncaught exception in device detection: {}", t.getMessage(), t);
+							ui.access(() -> {
+								deviceDetectionWait.setVisible(false);
+								errorNotification("Device detection failed: " + t.getMessage());
+							});
+						}
+					}
+				});
+			} catch (Exception e) {
+				logger.error("Failed to submit detection task: {}", e.getMessage(), e);
+				ui.access(() -> errorNotification("Failed to start device detection: " + e.getMessage()));
+			}
+		} else {
+			logger.error("Cannot start device detection: UI is null");
+		}
 	}
-	
+
 	private void stopAllDevices() {
+		// Create a safe copy of device configs to avoid concurrent modification
+		List<DeviceConfig> devicesToStop = new ArrayList<>(MQTTConfig.getCurrent().getPortToConfig().values());
+
 		// Stop all running services
-		for (DeviceConfig deviceConfig : MQTTConfig.getCurrent().getPortToConfig().values()) {
+		for (DeviceConfig deviceConfig : devicesToStop) {
 			if (deviceConfig.getFirmataService() != null) {
-				logger.info("Stopping device on port {} due to platform change", 
-						deviceConfig.getSerialPort());
-				
+				logger.info("Stopping device on port {} due to platform change",
+				        deviceConfig.getSerialPort());
+
 				// Get the UI components for proper UI updates
 				DeviceUIComponents uiComponents = deviceUIComponentsMap.get(deviceConfig.getSerialPort());
 				if (uiComponents != null) {
@@ -1196,60 +1214,60 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 				}
 			}
 		}
-		
+
 		// Post an update to refresh the UI
 		MQTTConfig.getCurrent().getUiEventBus().post(new UIEvent.ConfigsUpdated());
 	}
-	
-	/** devices for platform '{}'", MQTTConfig.getCurrent().getFop());
-	 * Auto-start all devices with valid configurations
+
+	/**
+	 * devices for platform '{}'", MQTTConfig.getCurrent().getFop()); Auto-start all devices with valid configurations
 	 */
 	private void autoStartDevices(UI ui) {
 		if (!MQTTConfig.fullyConnected()) {
 			logger.info("Not fully connected to server with platform, skipping auto-start");
 			return;
 		}
-		
+
 		logger.info("Auto-starting devices for platform '{}'", MQTTConfig.getCurrent().getFop());
 		boolean devicesStarted = false;
-		
+
 		// Get the in-memory list of detected devices - don't load from config
 		Map<String, DeviceConfig> deviceConfigs = MQTTConfig.getCurrent().getPortToConfig();
 		if (deviceConfigs == null || deviceConfigs.isEmpty()) {
 			logger.info("No devices available for auto-start");
 			return;
 		}
-		
+
 		// Iterate through detected devices
 		for (DeviceConfig deviceConfig : deviceConfigs.values()) {
 			String deviceType = deviceConfig.getDeviceTypeName();
 			if (deviceType != null) {
 				// Find the UI components for this device
 				DeviceUIComponents uiComponents = deviceUIComponentsMap.get(deviceConfig.getSerialPort());
-				
+
 				// Only proceed if UI components are found
 				if (uiComponents != null) {
 					Button startButton = uiComponents.startButton;
 					Button stopButton = uiComponents.stopButton;
-					
+
 					// Check if a corresponding configuration file exists
 					String configPath = ResourceWalker.getLocalDirPath().toString() + "/" + deviceType + ".xlsx";
 					boolean configExists = new java.io.File(configPath).exists();
-					
+
 					if (configExists) {
 						logger.info("Auto-starting device: {} on port {}", deviceType, deviceConfig.getSerialPort());
-						
+
 						// Stop any existing service
 						if (deviceConfig.getFirmataService() != null) {
 							deviceConfig.getFirmataService().stopDevice(null);
 						}
-						
+
 						// Create service with UI callbacks to update button states
 						deviceConfig.setFirmataService(new FirmataService(
-								deviceConfig, 
-								() -> confirmStartOk(ui, startButton, stopButton),
-								(ex) -> reportError(ex, ui)));
-						
+						        deviceConfig,
+						        () -> confirmStartOk(ui, startButton, stopButton),
+						        (ex) -> reportError(ex, ui)));
+
 						try {
 							deviceConfig.getFirmataService().startDevice();
 							devicesStarted = true;
@@ -1257,18 +1275,41 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 							logger.error("Error auto-starting device {}: {}", deviceType, e1.getMessage());
 						}
 					} else {
-						logger.info("Skipping auto-start for device {} on port {}: configuration file not found", 
-							deviceType, deviceConfig.getSerialPort());
+						logger.info("Skipping auto-start for device {} on port {}: configuration file not found",
+						        deviceType, deviceConfig.getSerialPort());
 					}
 				} else {
-					logger.info("Skipping auto-start for device {} on port {}: UI components not initialized", 
-						deviceType, deviceConfig.getSerialPort());
+					logger.info("Skipping auto-start for device {} on port {}: UI components not initialized",
+					        deviceType, deviceConfig.getSerialPort());
 				}
 			}
 		}
-		
+
 		if (!devicesStarted) {
 			logger.info("No devices were auto-started");
 		}
 	}
+
+	private void confirmStartOk(UI ui, Button start, Button stop) {
+        Objects.requireNonNull(ui).access(() -> {
+            start.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
+            stop.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+            stop.setEnabled(true);
+            start.setEnabled(false);
+        });
+    }
+
+    private void confirmStopOk(UI ui, Button start, Button stop) {
+        Objects.requireNonNull(ui).access(() -> {
+            stop.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
+            start.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+            start.setEnabled(true);
+            stop.setEnabled(false);
+        });
+    }
+
+    private void addFormItemX(Component c, String label) {
+        var item = form.addFormItem(c, label);
+        item.getElement().getStyle().set("--vaadin-form-item-label-width", "10em");
+    }
 }
