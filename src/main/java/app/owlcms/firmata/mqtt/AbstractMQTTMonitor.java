@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.eclipse.paho.client.mqttv3.MqttAsyncClient;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
@@ -27,6 +29,11 @@ public abstract class AbstractMQTTMonitor {
 	private Logger logger = (Logger) LoggerFactory.getLogger(AbstractMQTTMonitor.class);
 	private String name;
 	private String subscription;
+	// Store the clientId and brokerUri for logging since we need it in multiple places
+	protected String clientId;
+	protected String brokerUri;
+	// Add tracking of subscriptions to avoid duplicates
+	private final Set<String> currentSubscriptions = new HashSet<>();
 
 	public void close() {
 		if (client == null) {
@@ -81,9 +88,58 @@ public abstract class AbstractMQTTMonitor {
 		password = MQTTConfig.getCurrent().getMqttPassword();
 		MqttConnectOptions connOpts = setupMQTTClient(userName, password);
 		client.connect(connOpts).waitForCompletion();
-		client.subscribe(getSubscription(), 0);
-		logger.info("Monitor {} subscribed to {} {}", getName(), getSubscription(),
-		        client.getCurrentServerURI());
+		
+		// Only subscribe if not already subscribed
+		if (currentSubscriptions.add(getSubscription())) {
+			client.subscribe(getSubscription(), 0);
+			logger.info("Monitor {} [{}] subscribed to {} {}", 
+				getName(), getDeviceIdentifier(), getSubscription(), client.getCurrentServerURI());
+		} else {
+			logger.debug("Already subscribed to {} {}", getSubscription(), client.getCurrentServerURI());
+		}
+	}
+
+	/**
+	 * Get device identifier for logging purposes.
+	 * @return String identifying the device being monitored
+	 */
+	protected String getDeviceIdentifier() {
+	    return "ConfigMonitor";
+	}
+
+	protected void doConnect(String... topics) throws MqttException, MqttSecurityException {
+		try {
+			userName = MQTTConfig.getCurrent().getMqttUsername();
+			password = MQTTConfig.getCurrent().getMqttPassword();
+			MqttConnectOptions connOpts = setupMQTTClient(userName, password);
+			
+			// Store client ID and broker URI for logging purposes
+			clientId = client.getClientId();
+			brokerUri = client.getServerURI();
+			
+			client.connect(connOpts).waitForCompletion();
+			
+			for (String topic : topics) {
+				if (client != null) {
+					client.subscribe(topic, 0);
+					// Use getDeviceInfo() for logging
+					logger.info("Monitor {} [{}] subscribed to {} {}", clientId, getDeviceInfo(), topic, brokerUri);
+				}
+			}
+		} catch (MqttException e) {
+			logger.error("failed MQTT connect {}", e.getMessage());
+			throw e;
+		}
+	}
+
+	/**
+	 * Gets device information for logging purposes.
+	 * Subclasses should override this to provide specific device information.
+	 * @return String representing the device being monitored
+	 */
+	protected String getDeviceInfo() {
+	    // Default implementation
+	    return "Server Config";
 	}
 
 	public String getName() {

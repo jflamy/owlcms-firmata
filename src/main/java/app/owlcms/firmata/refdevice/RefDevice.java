@@ -33,6 +33,9 @@ public class RefDevice {
 	private OutputEventHandler outputEventHandler;
 	private String serialPortName;
 
+	private volatile boolean initialized = false;
+	private final Object initLock = new Object();
+
 	public RefDevice(String myPort, IODevice device, OutputEventHandler outputEventHandler,
 	        InputEventHandler inputEventHandler) {
 		logger.setLevel(Level.DEBUG);
@@ -60,14 +63,25 @@ public class RefDevice {
 	}
 
 	public void initBoard() throws Exception {
-		try {
-			firmataDevice.start(); // start comms with board;
-			logger.info("Communication started on port {}", serialPortName);
-			firmataDevice.ensureInitializationIsDone();
-			logger.info("Board initialized.");
-		} catch (Exception ex) {
-			logger.error("Could not connect to board. " + ex);
-			throw new RuntimeException(ex.getCause() != null ? ex.getCause() : ex);
+		// Check if already initialized
+		synchronized(initLock) {
+			if (initialized) {
+				logger.debug("Board already initialized for port {}", serialPortName);
+				return;
+			}
+			
+			try {
+				firmataDevice.start(); // start comms with board;
+				logger.info("Communication started on port {}", serialPortName);
+				firmataDevice.ensureInitializationIsDone();
+				logger.info("Board initialized.");
+				
+				// Set initialized flag after successful init
+				initialized = true;
+			} catch (Exception ex) {
+				logger.error("Could not connect to board. " + ex);
+				throw new RuntimeException(ex.getCause() != null ? ex.getCause() : ex);
+			}
 		}
 	}
 

@@ -32,4 +32,11 @@ public class ConfigMQTTMonitor extends AbstractMQTTMonitor {
 		return connOpts;
 	}
 
+	// Override getDeviceInfo to provide server configuration information
+
+	@Override
+	protected String getDeviceInfo() {
+		return "Server Config";
+	}
+
 }

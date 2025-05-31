@@ -30,6 +30,8 @@ public class FopMQTTMonitor extends AbstractMQTTMonitor {
 	boolean closed;
 	OutputEventHandler emitDefinitionHandler;
 	Logger logger = (Logger) LoggerFactory.getLogger(FopMQTTMonitor.class);
+	// Add device config field to track which device this monitor is for
+	private DeviceConfig deviceConfig;
 
 	public FopMQTTMonitor(String fopName, OutputEventHandler emitDefinitionHandler, RefDevice board,
 	        DeviceConfig config) {
@@ -38,6 +40,7 @@ public class FopMQTTMonitor extends AbstractMQTTMonitor {
 		this.setSubscription(OWLCMS_FOP);
 		this.board = board;
 		this.emitDefinitionHandler = emitDefinitionHandler;
+		this.deviceConfig = config;  // Store the device config
 		this.start(fopName);
 	}
 
@@ -52,6 +55,28 @@ public class FopMQTTMonitor extends AbstractMQTTMonitor {
 		        password != null ? password : "");
 		client.setCallback(new FopMQTTCallback(this, emitDefinitionHandler, board));
 		return connOpts;
+	}
+
+	/**
+	 * Get device information for logging
+	 */
+	@Override
+	protected String getDeviceInfo() {
+	    // If we have a device config, use its information
+	    if (board != null) {
+	        return (deviceConfig != null && deviceConfig.getDeviceTypeName() != null) ? 
+	            deviceConfig.getDeviceTypeName() + " on " + deviceConfig.getSerialPort() : 
+	            "Device on " + (deviceConfig != null ? deviceConfig.getSerialPort() : "unknown port");
+	    }
+	    return getName() != null ? "Platform " + getName() : "Unknown device";
+	}
+
+	@Override
+	protected String getDeviceIdentifier() {
+	    if (deviceConfig != null) {
+	        return deviceConfig.getDeviceTypeName() + " on " + deviceConfig.getSerialPort();
+	    }
+	    return getName() != null ? "Platform " + getName() : "Unknown device";
 	}
 
 }

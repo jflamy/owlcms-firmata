@@ -327,6 +327,7 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 
 	@Subscribe
 	public void eventDeviceConfigs(UIEvent.ConfigsUpdated cu) {
+		logger.debug("Received ConfigsUpdated event: {}", System.identityHashCode(cu));
 		UI ui = UI.getCurrent();
 		if (ui != null) {
 			ui.access(() -> {
@@ -349,6 +350,7 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 
 	@Subscribe
 	public void eventPlatformsUpdate(UIEvent.PlatformsUpdated platformsUpdateEvent) {
+		logger.debug("Received PlatformsUpdated event: {}", System.identityHashCode(platformsUpdateEvent));
 		UI ui = UI.getCurrent();
 		if (ui != null) {
 			ui.access(() -> {
@@ -1137,7 +1139,7 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 	private void startDeviceDetection() {
 	    UI ui = UI.getCurrent();
 	    if (ui != null) {
-	        logger.info("Starting device detection after platform determination");
+	        logger.debug("Starting device detection after platform determination");
 	        
 	        try {
 	            // Show progress indicator

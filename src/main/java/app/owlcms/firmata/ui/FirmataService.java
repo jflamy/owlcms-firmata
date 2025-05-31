@@ -28,6 +28,8 @@ public class FirmataService {
 	private String serialPort;
 	private DeviceConfig config;
 	private boolean running = false;
+	
+	private FopMQTTMonitor mqttMonitor; // Add field for monitor
 
 	public FirmataService(DeviceConfig config, Runnable confirmationCallback, Consumer<Throwable> errorCallback) {
 		this.confirmationCallback = confirmationCallback;
@@ -57,39 +59,61 @@ public class FirmataService {
 		this.serialPort = serialPort;
 		try {
 			this.setBoard(null);
-			// read configurations
-			XSSFWorkbook workbook = new XSSFWorkbook(is);
-			var dsr = new SpecReader(fopName);
-			dsr.readPinDefinitions(workbook);
-			var outputEventHandler = dsr.getOutputEventHandler();
-			var inputEventHandler = dsr.getInputEventHandler();
-			logger.info("Configuration loaded.");
+			
+			// Track if config was already loaded
+			boolean configLoaded = false;
+			
+			try {
+				// read configurations
+				XSSFWorkbook workbook = new XSSFWorkbook(is);
+				var dsr = new SpecReader(fopName);
+				dsr.readPinDefinitions(workbook);
+				var outputEventHandler = dsr.getOutputEventHandler();
+				var inputEventHandler = dsr.getInputEventHandler();
+				
+				// Only log once
+				if (!configLoaded) {
+					logger.info("Configuration loaded.");
+					configLoaded = true;
+				}
 
-			// create the Firmata device and its Board wrapper
-			logger.debug("starting firmata device on port {}", serialPort);
-			device = new FirmataDevice(new JSerialCommTransport(serialPort));
-			logger.info("Device created on port {}", serialPort);
+				// create the Firmata device and its Board wrapper
+				logger.debug("starting firmata device on port {}", serialPort);
+				device = new FirmataDevice(new JSerialCommTransport(serialPort));
+				logger.info("Device created on port {}", serialPort);
+				
+				synchronized(this) {
+					if (this.getBoard() != null) {
+						logger.debug("Board already exists for port {}, not recreating", serialPort);
+						return;
+					}
+					RefDevice board2 = new RefDevice(serialPort, device, outputEventHandler, inputEventHandler);
+					board2.init();
+					this.setBoard(board2);
+					
+					// Create MQTT monitor with proper initialization
+					mqttMonitor = new FopMQTTMonitor(fopName, outputEventHandler, getBoard(), config);
+				}
 
-			RefDevice board2 = new RefDevice(serialPort, device, outputEventHandler, inputEventHandler);
-			board2.init();
-			this.setBoard(board2);
-
-			FopMQTTMonitor mqtt = new FopMQTTMonitor(fopName, outputEventHandler, getBoard(), config);
-			outputEventHandler.handle("fop/startup", "", board2);
-
-			device.addEventListener(new EventListener(inputEventHandler, mqtt, getBoard()));
-			confirmationCallback.run();
-		} catch (Exception e) {
-			logger./**/warn("firmataThread exception {}",e);
-			errorCallback.accept(e);
-			if (device != null) {
-				try {
-					logger.info("Stopping device.");
-					device.stop();
-					this.setBoard(null);
-				} catch (IOException e2) {
+				outputEventHandler.handle("fop/startup", "", getBoard());
+				device.addEventListener(new EventListener(inputEventHandler, mqttMonitor, getBoard()));
+				confirmationCallback.run();
+				
+			} catch (Exception e) {
+				logger./**/warn("firmataThread exception {}",e);
+				errorCallback.accept(e);
+				if (device != null) {
+					try {
+						logger.info("Stopping device.");
+						device.stop();
+						this.setBoard(null);
+					} catch (IOException e2) {
+					}
 				}
 			}
+		} catch (Throwable e) {
+			logger.error("Unexpected error in firmataThread", e);
+			errorCallback.accept(e);
 		}
 	}
 
