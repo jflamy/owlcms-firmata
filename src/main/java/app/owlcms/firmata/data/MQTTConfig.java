@@ -10,7 +10,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.SynchronousQueue;
@@ -29,8 +28,8 @@ import com.google.common.eventbus.EventBus;
 import app.owlcms.firmata.mqtt.ConfigMQTTMonitor;
 import app.owlcms.firmata.ui.FirmataService;
 import app.owlcms.firmata.utils.LoggerUtils;
-import app.owlcms.firmata.utils.Sleeper;
 import app.owlcms.utils.ResourceWalker;
+import ch.qos.logback.classic.Logger;
 
 public class MQTTConfig {
 	
