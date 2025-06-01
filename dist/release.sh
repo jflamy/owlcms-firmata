@@ -5,7 +5,7 @@
 # TAG = x.y.z  x = major, y = minor
 # z = 0 : normal release
 # z > 0 : bug fix release
-export TAG=2.2.0
+export TAG=2.3.0
 
 # use -alpha00 or -beta00 or -rc00 or empty for final release
 export ALPHA_BETA_RELEASE=
