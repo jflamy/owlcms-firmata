@@ -42,10 +42,8 @@ import com.vaadin.flow.component.html.Hr;
 import com.vaadin.flow.component.html.NativeLabel;
 import com.vaadin.flow.component.html.Paragraph;
 import com.vaadin.flow.component.html.Span;
-import com.vaadin.flow.component.icon.Icon;
 import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.notification.Notification.Position;
-import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.progressbar.ProgressBar;
@@ -146,123 +144,176 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 			logger.info("Connection attempt already in progress, skipping");
 			return;
 		}
-
 		connectionAttemptInProgress = true;
 		try {
-			configMonitor.quickCheckConnection();
+			// For auto-connect at startup, read settings first
+			MQTTConfig.getCurrent().readSettings();
+			logger.info("Auto-connect using stored server address: {}", MQTTConfig.getCurrent().getMqttServer());
+			
 			UI ui = UI.getCurrent();
 			if (ui != null) {
+				// Schedule handleAutoConnection and then the flag reset in the UI thread
 				ui.access(() -> {
-					// We still need to handle the MQTT connection to get platforms
-					handleMQTTConnection();
-					connectionAttemptInProgress = false;
+					handleAutoConnection();
+					// Note: if handleAutoConnection calls tryConnectionSequence, 
+					// the sequence might complete after this flag is reset.
+					// This is generally okay as the flag prevents *new* top-level attempts.
 				});
 			} else {
 				// No UI case
-				handleMQTTConnection();
-				connectionAttemptInProgress = false;
+				handleAutoConnection();
 			}
 		} catch (Exception e) {
-			// 1. Try configured address first
+			// Catch errors from readSettings or initial setup before handleAutoConnection
+			logger.error("Error during autoConnectOrScan setup phase: {}", e.getMessage(), e);
+			// Fallback to trying connection sequence with potentially loaded server config
 			String server = MQTTConfig.getCurrent().getMqttServer();
-			tryConnectionSequence(server);
+			if (server != null && !server.isEmpty()) {
+				logger.info("Setup failed, trying connection sequence with stored server: {}", server);
+				tryConnectionSequence(server);
+			} else {
+				logger.warn("Setup failed and no server configured to attempt fallback sequence.");
+			}
+		} finally {
+			// This finally block ensures the flag is reset after the initial phase of autoConnectOrScan.
+			// If tryConnectionSequence was called, it runs independently of this specific flag instance.
+			connectionAttemptInProgress = false;
 		}
 	}
 
-	private void tryConnectionSequence(String server) {
-		// 1. Try direct connection to given address
-		if (isMqttReachable(server, MQTTConfig.getCurrent().getMqttPort())) {
-			logger.warn("MQTT server reachable at configured address: {}", server);
-			UI ui = UI.getCurrent();
-			if (ui != null) {
-				ui.access(() -> handleMQTTConnection());
-			}
-			return;
-		}
+	// Add separate method for auto-connection (startup)
+	private void handleAutoConnection() { // Does not manage connectionAttemptInProgress directly
+		try {
+			logger.info("Auto-connecting to stored MQTT server: {}", MQTTConfig.getCurrent().getMqttServer());
+			
+			configMonitor.quickCheckConnection();
+			configMonitor.start("config");
 
-		// 2. Try localhost if different from given address
-		if (!"127.0.0.1".equals(server) && isMqttReachable("127.0.0.1", MQTTConfig.getCurrent().getMqttPort())) {
-			logger.warn("MQTT server reachable at localhost");
+			if (MQTTConfig.getCurrent().isConnected()) {
+				logger.info("Auto-connection successful");
+				UI.getCurrent().access(() -> { // Ensure UI updates are in UI thread
+					connectButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
+					disconnectButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+					messageConnected();
+				});
+				MQTTConfig.getCurrent().saveSettings(); // Save settings on successful auto-connection
+				logger.info("Config saved after successful auto-connection.");
+				requestPlatformsWithRetry();
+			} else {
+				logger.warn("Auto-connection failed (isConnected is false). Falling back to connection sequence.");
+				UI.getCurrent().access(this::messageNotConnected);
+				tryConnectionSequence(MQTTConfig.getCurrent().getMqttServer());
+			}
+			// Trigger UI refresh for device configs
+			eventDeviceConfigs(new UIEvent.ConfigsUpdated());
+		} catch (Exception e1) {
+			logger.warn("Auto-connect direct attempt failed: {}. Falling back to connection sequence.", e1.getMessage());
+			UI.getCurrent().access(this::messageConnectionError); // Show error before sequence
+			tryConnectionSequence(MQTTConfig.getCurrent().getMqttServer());
+			eventDeviceConfigs(new UIEvent.ConfigsUpdated()); // Refresh UI after sequence attempt
+		}
+	}
+
+	private void tryConnectionSequence(String failedServerAddress) {
+		// This method is part of an ongoing connection attempt, so it doesn't manage connectionAttemptInProgress itself.
+		logger.info("Connection to {} failed. Starting fallback connection sequence.", failedServerAddress);
+
+		// 1. Try localhost
+		logger.info("Fallback Step 1: Trying localhost (127.0.0.1)");
+		if (isMqttReachable("127.0.0.1", MQTTConfig.getCurrent().getMqttPort())) {
+			logger.info("MQTT server reachable at localhost (127.0.0.1)");
 			UI ui = UI.getCurrent();
 			if (ui != null) {
 				ui.access(() -> {
-					MQTTConfig.getCurrent().setMqttServer("127.0.0.1");
-					handleMQTTConnection();
+					ConfirmDialog dialog = new ConfirmDialog();
+					dialog.setHeader("MQTT Server Found at Localhost");
+					dialog.setText("Could not connect to " + failedServerAddress +
+						". An MQTT server is available at 127.0.0.1. Do you want to use this address?");
+					dialog.setCancelable(true);
+					dialog.setConfirmText("Yes, use 127.0.0.1");
+					dialog.setCancelText("No");
+					dialog.addConfirmListener(event -> {
+						MQTTConfig.getCurrent().setMqttServer("127.0.0.1");
+						mqttServerField.setValue("127.0.0.1");
+						MQTTConfig.getCurrent().saveSettings();
+						handleMQTTConnection(); // Attempt full connection with localhost
+					});
+					dialog.addCancelListener(event -> trySubnetScan(failedServerAddress)); // User said no, try scanning
+					dialog.open();
 				});
+			} else {
+				// No UI, cannot confirm. Proceed to scan.
+				trySubnetScan(failedServerAddress);
 			}
-			return;
+			return; // Dialog callbacks will continue the process
 		}
 
-		// 3. If not reachable, try scanning if network is small
+		// Localhost not reachable or no UI to confirm, proceed to scan
+		trySubnetScan(failedServerAddress);
+	}
+
+	private void trySubnetScan(String failedServerAddress) {
+		// This method is part of an ongoing connection attempt.
+		logger.info("Fallback Step 2: Scanning subnet for MQTT server.");
 		final String subnetToScan = getActiveNetworkSubnet();
-		final String subnet = subnetToScan != null ? subnetToScan : getSubnet(server);
+		final String subnet = subnetToScan != null ? subnetToScan : getSubnet(failedServerAddress);
 
 		if (subnet != null && subnet.endsWith(".")) {
-			// Check subnet size before attempting scan
 			int hostCount = getSubnetHostCount(subnet);
-			if (hostCount > 256) {
-				logger.warn("Network too large for scanning: {} hosts", hostCount);
+			if (hostCount > 256) { // Equivalent to /24 or smaller network for typical IPv4
+				logger.warn("Network too large for scanning: {} hosts on subnet starting with {}", hostCount, subnet);
 				UI ui = UI.getCurrent();
 				if (ui != null) {
-					ui.access(() -> {
-						Notification.show(
-							"Network too large for automatic scanning. Please enter server address manually.",
-							3000, Position.TOP_END)
-							.addThemeVariants(NotificationVariant.LUMO_ERROR);
-					});
+					ui.access(() -> errorNotification(
+						"Network (subnet " + subnet + "...) too large for automatic scanning (" + hostCount
+							+ " hosts). Please enter server address manually."));
 				}
-				return;
+				return; // End of this path for tryConnectionSequence
 			}
 
-			logger.warn("Scanning for MQTT server on active network subnet {} (host count: {})", subnet, hostCount);
+			logger.info("Scanning for MQTT server on subnet {} (estimated {} hosts)", subnet, hostCount);
 			UI ui = UI.getCurrent();
 			if (ui != null) {
-				ui.access(() -> {
-					Notification.show("Scanning for MQTT server on subnet " + subnet,
-					        2000, Position.TOP_END);
-				});
+				ui.access(() -> Notification.show("Scanning for MQTT server on subnet " + subnet + "...",
+					3000, Position.TOP_END));
 			}
-			String found = scanForMQTTServer(subnet, MQTTConfig.getCurrent().getMqttPort(), 50);
-			if (found != null) {
-				UI ui2 = UI.getCurrent();
-				if (ui2 != null) {
-					ui2.access(() -> {
-						// Ask user for confirmation before changing config
+
+			String foundIp = scanForMQTTServer(subnet, MQTTConfig.getCurrent().getMqttPort(), 100);
+			UI ui2 = UI.getCurrent(); // Re-fetch UI instance
+			if (ui2 != null) {
+				ui2.access(() -> {
+					if (foundIp != null) {
+						logger.info("Found MQTT server by scan at: {}", foundIp);
 						ConfirmDialog dialog = new ConfirmDialog();
-						dialog.setHeader("MQTT Server Found");
-						dialog.setText("Could not connect to " + server + ". A MQTT server was found at "
-						        + found + ". Do you want to update the configuration and connect?");
+						dialog.setHeader("MQTT Server Found by Scan");
+						dialog.setText("Could not connect to " + failedServerAddress +
+							". A MQTT server was found by network scan at " + foundIp +
+							". Do you want to update the configuration and connect?");
 						dialog.setCancelable(true);
-						dialog.setConfirmText("Yes");
+						dialog.setConfirmText("Yes, use " + foundIp);
 						dialog.setCancelText("No");
 						dialog.addConfirmListener(event -> {
-							MQTTConfig.getCurrent().setMqttServer(found);
-							mqttServerField.setValue(found); // Update the UI field
-							handleMQTTConnection(); // Retry connection with new address
+							MQTTConfig.getCurrent().setMqttServer(foundIp);
+							mqttServerField.setValue(foundIp);
 							MQTTConfig.getCurrent().saveSettings();
+							handleMQTTConnection(); // Attempt full connection with the found IP
 						});
+						// If user cancels, no further automatic steps.
 						dialog.open();
-					});
-				}
-			} else {
-				logger.warn("No MQTT server found on subnet {}", subnet);
-				UI ui2 = UI.getCurrent();
-				if (ui2 != null) {
-					ui2.access(() -> {
-						Notification.show("No MQTT server found on subnet " + subnet, 3000, Position.TOP_END)
-						        .addThemeVariants(NotificationVariant.LUMO_ERROR);
-					});
-				}
+					} else {
+						logger.warn("No MQTT server found on subnet {}", subnet);
+						errorNotification("No MQTT server found on subnet " + subnet +
+							". Please check the server address and ensure the MQTT server is running.");
+					}
+				});
 			}
 		} else {
-			logger.warn("Not scanning for MQTT server: unable to determine subnet from '{}'", server);
+			logger.warn("Cannot determine subnet for scanning based on failed address: '{}' or active interfaces.",
+				failedServerAddress);
 			UI ui = UI.getCurrent();
 			if (ui != null) {
-				ui.access(() -> {
-					Notification.show("Not scanning for MQTT server: unable to determine subnet",
-					        3000, Position.TOP_END)
-					        .addThemeVariants(NotificationVariant.LUMO_ERROR);
-				});
+				ui.access(() -> errorNotification(
+					"Cannot determine network subnet for scanning. Please enter the correct server address manually."));
 			}
 		}
 	}
@@ -345,6 +396,9 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		AtomicBoolean found = new AtomicBoolean(false);
 		String[] result = new String[1];
 		List<Thread> threads = new ArrayList<>();
+		
+		logger.info("Starting subnet scan for MQTT server on {}1-254 port {}", subnet, port);
+		
 		for (int i = 1; i < 255; i++) {
 			final String host = subnet + i;
 			Thread t = new Thread(() -> {
@@ -354,22 +408,37 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 					socket.connect(new java.net.InetSocketAddress(host, port), timeoutMs);
 					if (!found.getAndSet(true)) {
 						result[0] = host;
+						logger.info("Found MQTT server at {}", host);
 					}
 				} catch (Exception e) {
-					// ignore
+					// ignore connection failures during scan
 				}
 			});
 			threads.add(t);
 			t.start();
 		}
+		
+		// Wait for all threads to complete or first success
 		for (Thread t : threads) {
 			try {
-				t.join(timeoutMs + 50);
+				t.join(timeoutMs + 100);
 			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
 			}
 			if (found.get())
 				break;
 		}
+		
+		// Interrupt remaining threads if we found a server
+		if (found.get()) {
+			for (Thread t : threads) {
+				if (t.isAlive()) {
+					t.interrupt();
+				}
+			}
+		}
+		
+		logger.info("Subnet scan completed. Result: {}", result[0] != null ? result[0] : "No server found");
 		return result[0];
 	}
 
@@ -583,24 +652,13 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 	}
 
 	private void errorNotification(String errorMessage) {
-		Notification notification = new Notification();
-		notification.addThemeVariants(NotificationVariant.LUMO_ERROR);
-		notification.setPosition(Position.MIDDLE);
-
-		Div text = new Div(new Text(errorMessage));
-
-		Button closeButton = new Button(new Icon("lumo", "cross"));
-		closeButton.addThemeVariants(ButtonVariant.LUMO_TERTIARY_INLINE);
-		closeButton.setAriaLabel("Close");
-		closeButton.addClickListener(event -> {
-			notification.close();
-		});
-
-		HorizontalLayout layout = new HorizontalLayout(text, closeButton);
-		layout.setAlignItems(Alignment.CENTER);
-
-		notification.add(layout);
-		notification.open();
+		ConfirmDialog dialog = new ConfirmDialog();
+		dialog.setHeader("Error");
+		dialog.setText(errorMessage);
+		dialog.setConfirmText("OK");
+		dialog.setCancelable(false); // Force user to click OK
+		dialog.setCloseOnEsc(false); // Prevent closing with Esc key
+		dialog.open();
 	}
 
 	private Collection<String> getAvailableConfigNames() {
@@ -860,20 +918,28 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		connectButton.addClickListener(e -> handleMQTTConnection());
 
 		disconnectButton.addClickListener(e -> {
-			if (MQTTConfig.getCurrent().isConnected()) {
-				disconnectButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
-				connectButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+			// Perform disconnection actions first
+			try {
+				// configMonitor.close(); // This is called by MQTTConfig.getCurrent().closeAll()
+				MQTTConfig.getCurrent().closeAll(); // This also sets internal connected flags to false
+			} catch (Throwable e1) {
+				logger.warn("Error during MQTT disconnection: {}", e1.getMessage());
 			}
+
+			// Update button states to reflect disconnection
+			// After disconnection, connect button should be primary, disconnect non-primary
+			disconnectButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
+			connectButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+			
+			// Clear platform information
 			platformField.clear();
 			platformField.setItems(new ArrayList<String>());
-			try {
-				configMonitor.close();
-				MQTTConfig.getCurrent().closeAll();
-			} catch (Throwable e1) {
-				// ignore
-			}
-			eventDeviceConfigs(new UIEvent.ConfigsUpdated());
-			messageNotConnected();
+			// MQTTConfig.getCurrent().setFop(null); // closeAll() should handle clearing fop/fops
+			// MQTTConfig.getCurrent().saveSettings(); // Optionally save this cleared state if desired
+
+			// Update UI messages and trigger general UI refresh
+			messageNotConnected(); // Explicitly set "not connected" message status
+			eventDeviceConfigs(new UIEvent.ConfigsUpdated()); // For other dependent UI parts to refresh
 		});
 
 		Span buttons = new Span(connectButton, new Text("  "), disconnectButton);
@@ -882,10 +948,19 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		mqttConfigTitle.setAlignItems(Alignment.BASELINE);
 		mqttConfigTitle.getStyle().set("margin-top", "0.5em");
 
+		// Read settings first to populate field with stored value
+		MQTTConfig.getCurrent().readSettings();
+		
 		mqttServerField = new TextField(); // Initialize field
 		mqttServerField.setHelperText("Usually the address or name of the owlcms server");
 		mqttServerField.setValue(MQTTConfig.getCurrent().getMqttServer());
-		mqttServerField.addValueChangeListener(e -> MQTTConfig.getCurrent().setMqttServer(e.getValue()));
+		// Update config when field value changes, but don't auto-connect
+		mqttServerField.addValueChangeListener(e -> {
+			// Only update config, don't connect automatically
+			if (e.isFromClient()) {
+				logger.debug("Server field updated to: {}", e.getValue());
+			}
+		});
 
 		TextField mqttPortField = new TextField();
 		mqttPortField.setValue(MQTTConfig.getCurrent().getMqttPort());
@@ -922,63 +997,78 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		        mqttServerField, mqttPortField, mqttUsernameField, mqttPasswordField);
 	}
 
-	// Update the handleMQTTConnection method to better handle connection sequence
+	// Update the handleMQTTConnection method to use the UI field value
 	private void handleMQTTConnection() {
-		try {
-			// Check if MQTT client is already connected to avoid multiple connection attempts
-			if (configMonitor.isConnected()) {
-				logger.info("MQTT client already connected, updating UI and checking platform status");
-				// Just update UI but don't attempt reconnection
-				connectButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
-				disconnectButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
-				messageConnected();
+		if (connectionAttemptInProgress) { 
+			logger.info("handleMQTTConnection: Connection attempt already in progress. Skipping.");
+			return;
+		}
+		connectionAttemptInProgress = true;
 
-				// Use our retry method instead of a single attempt
-				requestPlatformsWithRetry();
-				return;
-			}
+		String serverFromUIField = mqttServerField.getValue();
+		String initialServerInConfig = MQTTConfig.getCurrent().getMqttServer(); 
+		String serverToAttemptConnectionWith;
+		boolean uiFieldCausedConfigChangeForAttempt = false;
 
-			logger.info("Establishing new connection to MQTT server: {}", MQTTConfig.getCurrent().getMqttServer());
-			// Try direct connection first
-			try {
-				configMonitor.quickCheckConnection();
-				configMonitor.start("config");
-			} catch (Exception e) {
-				// Connection failed - fall back to scanning
-				logger.warn("Direct connection failed, falling back to scanning: {}", e.getMessage());
-				String server = MQTTConfig.getCurrent().getMqttServer();
-				tryConnectionSequence(server);
-				return;
-			}
-
-			// Update UI based on connection result
-			if (MQTTConfig.getCurrent().isConnected()) {
-				logger.info("Connection successful");
-				connectButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
-				disconnectButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
-				messageConnected();
-
-				// Log the current saved platform
-				String currentPlatform = MQTTConfig.getCurrent().getFop();
-				logger.info("Connected to server, current saved platform: {}", currentPlatform);
-
-				// Use our retry method for reliable platform retrieval
-				requestPlatformsWithRetry();
-
-				// Save connection settings
-				MQTTConfig.getCurrent().saveSettings();
-				logger.info("Config saved after successful connection");
+		if (serverFromUIField != null && !serverFromUIField.trim().isEmpty() &&
+		    !serverFromUIField.trim().equals(initialServerInConfig)) {
+			serverToAttemptConnectionWith = serverFromUIField.trim();
+			MQTTConfig.getCurrent().setMqttServer(serverToAttemptConnectionWith);
+			uiFieldCausedConfigChangeForAttempt = true;
+			logger.info("Connect button: Will attempt connection with server from UI field: {}", serverToAttemptConnectionWith);
+		} else {
+			serverToAttemptConnectionWith = initialServerInConfig;
+			if (serverFromUIField == null || serverFromUIField.trim().isEmpty()) {
+				logger.info("Connect button: UI server field is empty. Using configured server: {}", serverToAttemptConnectionWith);
 			} else {
-				logger.warn("Connection failed");
-				messageNotConnected();
+				logger.info("Connect button: UI server field matches configured server. Using: {}", serverToAttemptConnectionWith);
+			}
+		}
+
+		try {
+			if (configMonitor.isConnected() && MQTTConfig.getCurrent().getMqttServer().equals(serverToAttemptConnectionWith)) {
+				logger.info("MQTT client already connected to {}. Updating UI.", serverToAttemptConnectionWith);
+				connectButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
+				disconnectButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+				messageConnected();
+				requestPlatformsWithRetry();
+				// No need to save settings if already connected to the target.
+				// eventDeviceConfigs will be called in finally.
+				return; 
 			}
 
-			// Trigger UI refresh for device configs
-			eventDeviceConfigs(new UIEvent.ConfigsUpdated());
+			logger.info("Establishing new connection to MQTT server: {}", serverToAttemptConnectionWith);
+			configMonitor.quickCheckConnection(); 
+			configMonitor.start("config");        
 
-		} catch (Exception e1) {
-			messageConnectionError();
-			logger.error("Connection error: {}", e1.getMessage());
+			if (MQTTConfig.getCurrent().isConnected()) {
+				logger.info("Connection successful to {}", serverToAttemptConnectionWith);
+				connectButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
+				disconnectButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+				messageConnected();
+				requestPlatformsWithRetry();
+				MQTTConfig.getCurrent().saveSettings(); // Save if successful connection was made
+				logger.info("Config saved after successful connection.");
+			} else {
+				logger.warn("Connection attempt to {} failed (isConnected is false after attempt).", serverToAttemptConnectionWith);
+				if (uiFieldCausedConfigChangeForAttempt) {
+					MQTTConfig.getCurrent().setMqttServer(initialServerInConfig); 
+					logger.info("Reverted server address in config to: {} after failed attempt.", initialServerInConfig);
+				}
+				messageNotConnected(); 
+				tryConnectionSequence(serverToAttemptConnectionWith); 
+			}
+		} catch (Exception e) {
+			logger.warn("Connection attempt to {} failed: {}", serverToAttemptConnectionWith, e.getMessage());
+			if (uiFieldCausedConfigChangeForAttempt) {
+				MQTTConfig.getCurrent().setMqttServer(initialServerInConfig); 
+				logger.info("Reverted server address in config to: {} after exception during connection attempt.", initialServerInConfig);
+			}
+			messageConnectionError(); // Show error before sequence
+			tryConnectionSequence(serverToAttemptConnectionWith); 
+		} finally {
+			connectionAttemptInProgress = false;
+			eventDeviceConfigs(new UIEvent.ConfigsUpdated());
 		}
 	}
 

@@ -1,6 +1,7 @@
 package app.owlcms.firmata.data;
 
 import java.io.IOException;
+import java.io.OutputStream; // Added import
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -9,6 +10,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.SynchronousQueue;
@@ -27,13 +29,14 @@ import com.google.common.eventbus.EventBus;
 import app.owlcms.firmata.mqtt.ConfigMQTTMonitor;
 import app.owlcms.firmata.ui.FirmataService;
 import app.owlcms.firmata.utils.LoggerUtils;
+import app.owlcms.firmata.utils.Sleeper;
 import app.owlcms.utils.ResourceWalker;
-import ch.qos.logback.classic.Logger;
 
 public class MQTTConfig {
 	
 	private static Logger logger = (Logger) LoggerFactory.getLogger(MQTTConfig.class);
 	private static MQTTConfig current = null;
+	private static final String SETTINGS_PROPERTIES = "settings.properties"; // Define for consistency
 
 	
 	private String fop;
@@ -112,6 +115,8 @@ public class MQTTConfig {
 
 	public void setFop(String platform) {
 		this.fop = platform;
+		logger.info("Platform (fop) set to: {}. Saving settings.", this.fop);
+		saveSettings(); // Automatically save settings when fop is changed
 	}
 
 	public void setFops(List<String> fops) {
@@ -198,48 +203,68 @@ public class MQTTConfig {
 		return Arrays.asList(ports);
 	}
 	
-	public void saveSettings() {
-		Path devicesDir = ResourceWalker.getLocalDirPath();
-		Path settings = devicesDir.resolve("settings.properties");
-		Properties props = new Properties();
-		
-		// Only persist MQTT connection details and platform selection
-		// Do not save device list - that's detected at runtime
-		props.put("mqttServer", mqttServer);
-		props.put("mqttPort", mqttPort);
-		props.put("mqttUsername", mqttUsername);
-		
-		// Add platform (fop) to saved settings
-		if (fop != null) {
-			props.put("fop", fop);
+	public synchronized void saveSettings() {
+		Properties p = new Properties();
+		Path localDirPath = ResourceWalker.getLocalDirPath();
+		if (!Files.exists(localDirPath)) {
+			try {
+				Files.createDirectories(localDirPath);
+			} catch (IOException e) {
+				logger.error("Cannot create directory {}: {}", localDirPath, e.getMessage());
+				return;
+			}
 		}
-		
-		try {
-			props.store(Files.newOutputStream(settings, StandardOpenOption.CREATE, StandardOpenOption.WRITE),
-					"owlcms server connection information");
+		Path propertiesPath = localDirPath.resolve(SETTINGS_PROPERTIES); // Consistent use
+
+		// Populate properties with current values, only including the specified keys
+		if (this.fop != null && !this.fop.isEmpty()) {
+			p.setProperty("fop", this.fop);
+		}
+		if (this.mqttPort != null && !this.mqttPort.isEmpty()) {
+			p.setProperty("mqttPort", this.mqttPort);
+		}
+		if (this.mqttServer != null && !this.mqttServer.isEmpty()) {
+			p.setProperty("mqttServer", this.mqttServer);
+		}
+		if (this.mqttUsername != null && !this.mqttUsername.isEmpty()) {
+			p.setProperty("mqttUsername", this.mqttUsername);
+		}
+		// mqttPassword is intentionally not saved to the properties file for security.
+		// mqttClientId and mqttTopic are also not in the specified list.
+
+		try (OutputStream out = Files.newOutputStream(propertiesPath,
+				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+			p.store(out, "owlcms server connection information");
+			logger.info("Saved settings to {}: fop={}, mqttPort={}, mqttServer={}, mqttUsername={}",
+					propertiesPath,
+					p.getProperty("fop", ""),
+					p.getProperty("mqttPort", ""),
+					p.getProperty("mqttServer", ""),
+					p.getProperty("mqttUsername", ""));
 		} catch (IOException e) {
-			logger.error("cannot store settings {}", e.getMessage());
+			logger.error("Cannot write {}: {}", propertiesPath, e.getMessage());
 		}
 	}
 
-	public void readSettings() {
+	public synchronized void readSettings() {
+		Properties p = new Properties();
 		Path devicesDir = ResourceWalker.getLocalDirPath();
-		Path settings = devicesDir.resolve("settings.properties");
+		Path settings = devicesDir.resolve(SETTINGS_PROPERTIES); // Consistent use
 		try {
-			Properties props = new Properties();
-			props.load(Files.newInputStream(settings, StandardOpenOption.READ));
+			p.load(Files.newInputStream(settings, StandardOpenOption.READ));
 			
 			// Load only MQTT connection details and platform selection
-			String p = (String) props.get("mqttServer");
+			String mqttServerProp = p.getProperty("mqttServer");
 			String oldServer = mqttServer;  // store previous value
-			mqttServer = p != null ? p : mqttServer;
+			mqttServer = mqttServerProp != null ? mqttServerProp : mqttServer;
 			logger.error("MQTT Server address changed from '{}' to '{}'", oldServer, mqttServer);  // using ERROR to ensure visibility
-			p = (String) props.get("mqttPort");
-			mqttPort = p != null ? p : mqttPort;
-			p = (String) props.get("mqttUsername");
-			mqttUsername = p != null ? p : mqttUsername;
+			String mqttPortProp = p.getProperty("mqttPort");
+			mqttPort = mqttPortProp != null ? mqttPortProp : mqttPort;
+			String mqttUsernameProp = p.getProperty("mqttUsername");
+			mqttUsername = mqttUsernameProp != null ? mqttUsernameProp : mqttUsername;
 			// Load platform (fop) from settings
-			fop = (String) props.get("fop");
+			// Do not call setFop here to avoid recursive save during read
+			this.fop = p.getProperty("fop"); 
 			logger.info("Read platform from settings: {}", fop);
 		} catch (IOException e) {
 			logger.warn("cannot read settings {}", e.getMessage());
@@ -287,15 +312,15 @@ public class MQTTConfig {
 					logger.debug("Device initialization complete on port {}", systemPortName);
 					
 					String firmware = device.getFirmware();
-					firmware = firmware.replace(".ino", "");
+					firmware = firmware.replace(".ino", ""); // Ensure .ino is stripped
 					logger.info("Found firmware '{}' on port {} (took {}ms)", 
 							firmware, systemPortName, System.currentTimeMillis() - startTime);
 					portToFirmware.put(systemPortName, firmware);
-				} catch (Exception e) {
+				} catch (Exception e) { // Catch more general exceptions from ensureInitializationIsDone
 					logger.debug("Device initialization failed on port {}: {}", 
 						systemPortName, e.getMessage());
 				}
-			} catch (Exception e) {
+			} catch (Exception e) { // Catch broader exceptions from device creation/start
 				logger.debug("Could not detect firmware on port {}: {}", 
 					sp.getSystemPortName(), e.getMessage());
 			} finally {
@@ -321,7 +346,7 @@ public class MQTTConfig {
 		
 		// Read back from file to verify
 		Path devicesDir = ResourceWalker.getLocalDirPath();
-		Path settings = devicesDir.resolve("settings.properties");
+		Path settings = devicesDir.resolve(SETTINGS_PROPERTIES); // Consistent use
 		try {
 			Properties debugProps = new Properties();
 			debugProps.load(Files.newInputStream(settings, StandardOpenOption.READ));
