@@ -1,7 +1,10 @@
 # owlcms-firmata
 This project allows hobbyists to build their own [owlcms](https://owlcms.github.io/owlcms4-prerelease/#/index) refereeing devices using Arduino boards.  Construction diagrams and configuration files are provided, see below.
 
-owlcms-firmata is a user-configurable software interface to connect refereeing devices with the owlcms Olympic Weightlifting competition management system.  Instructions for use are found in the [INSTRUCTIONS.md](INSTRUCTIONS.md) file. The software uses configuration files to change pin assignments as required.  No programming is required. See the [diagrams/CONFIGURATION.md](diagrams/CONFIGURATION.md) file for details.
+## Software
+owlcms-firmata is a user-configurable software interface to connect refereeing devices (like those described below) with the owlcms Olympic Weightlifting competition management system.
+
+Instructions for use are found in the [INSTRUCTIONS.md](INSTRUCTIONS.md) file. The software uses configuration files to change pin assignments as required.  No programming is required. See the [diagrams/CONFIGURATION.md](diagrams/CONFIGURATION.md) file for details.
 
 ## Devices
 This project provides hardware diagrams and configuration files for the following:
