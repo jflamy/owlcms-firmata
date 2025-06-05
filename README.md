@@ -7,6 +7,10 @@ owlcms-firmata is a user-configurable software interface to connect refereeing d
 Instructions for use are found in the [INSTRUCTIONS.md](INSTRUCTIONS.md) file. The software uses configuration files to change pin assignments as required.  No programming is required. See the [diagrams/CONFIGURATION.md](diagrams/CONFIGURATION.md) file for details.
 
 ## Devices
+Building hardware devices using the Arduino chip is very simple.  For example, here is the circuit for a timekeeper device
+
+![timeKeeperDevice](https://github.com/owlcms/owlcms-firmata/blob/main/diagrams/timekeeper/timekeeperBox.png)
+
 This project provides hardware diagrams and configuration files for the following:
 
 - [Timekeeper Buttons](https://github.com/owlcms/owlcms-firmata/tree/main/diagrams/timekeeper) The buttons can be connected to the announcer laptop and do not interfere, or to a separate timekeeper laptop if one is used.
