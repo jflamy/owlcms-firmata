@@ -1,5 +1,6 @@
 ##### Changes since 2.0.0
 
+- 2.3.1: Reset the platform list when doing a Disconnect/Connect
 - 2.3.0: Automatic connections
   - on startup, automatic connection attempted to the last working configuration
   - if that does not work, scan of the local area network to locate an MQTT server

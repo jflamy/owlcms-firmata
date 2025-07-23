@@ -920,11 +920,14 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		disconnectButton.addClickListener(e -> {
 			// Perform disconnection actions first
 			try {
-				// configMonitor.close(); // This is called by MQTTConfig.getCurrent().closeAll()
+				configMonitor.close(); // This is called by MQTTConfig.getCurrent().closeAll()
 				MQTTConfig.getCurrent().closeAll(); // This also sets internal connected flags to false
 			} catch (Throwable e1) {
 				logger.warn("Error during MQTT disconnection: {}", e1.getMessage());
 			}
+
+			// Reset connection attempt flag to allow new connections
+			connectionAttemptInProgress = false;
 
 			// Update button states to reflect disconnection
 			// After disconnection, connect button should be primary, disconnect non-primary
@@ -1078,6 +1081,7 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 	private void requestPlatformsWithRetry() {
 		// Make multiple attempts to get platforms from server
 		int maxAttempts = 3;
+		MQTTConfig.getCurrent().setFops(new ArrayList<>()); // reset the list
 		for (int attempt = 0; attempt < maxAttempts; attempt++) {
 			try {
 				// Request configuration from the server

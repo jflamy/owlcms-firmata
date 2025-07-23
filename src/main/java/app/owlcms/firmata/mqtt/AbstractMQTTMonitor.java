@@ -42,6 +42,8 @@ public abstract class AbstractMQTTMonitor {
 		}
 		try {
 			setClosed(true);
+			// Clear subscription tracking on disconnect
+			currentSubscriptions.clear();
 			client.disconnect();
 			client.close();
 		} catch (MqttException e) {
@@ -89,14 +91,11 @@ public abstract class AbstractMQTTMonitor {
 		MqttConnectOptions connOpts = setupMQTTClient(userName, password);
 		client.connect(connOpts).waitForCompletion();
 		
-		// Only subscribe if not already subscribed
-		if (currentSubscriptions.add(getSubscription())) {
-			client.subscribe(getSubscription(), 0);
-			logger.info("Monitor {} [{}] subscribed to {} {}", 
-				getName(), getDeviceIdentifier(), getSubscription(), client.getCurrentServerURI());
-		} else {
-			logger.debug("Already subscribed to {} {}", getSubscription(), client.getCurrentServerURI());
-		}
+		// Always subscribe after connection - remove the duplicate check for reconnections
+		client.subscribe(getSubscription(), 0);
+		currentSubscriptions.add(getSubscription()); // Track after successful subscription
+		logger.info("Monitor {} [{}] subscribed to {} {}", 
+			getName(), getDeviceIdentifier(), getSubscription(), client.getCurrentServerURI());
 	}
 
 	/**
@@ -208,6 +207,8 @@ public abstract class AbstractMQTTMonitor {
 	
 	public void stop() {
 		try {
+			// Clear subscription tracking on stop
+			currentSubscriptions.clear();
 			client.disconnect();
 			client.close();
 		} catch (MqttException e) {
