@@ -57,6 +57,10 @@ public abstract class AbstractMQTTMonitor {
 		setClosed(false);
 		while (!mqttAsyncClient.isConnected() && !isClosed()) {
 			try {
+				// Clear subscriptions on connection loss to allow re-subscription
+				if (i > 0) {
+					currentSubscriptions.clear();
+				}
 				// doConnect will generate a new client Id, and wait for completion
 				doConnect();
 			} catch (Exception e) {
@@ -91,11 +95,17 @@ public abstract class AbstractMQTTMonitor {
 		MqttConnectOptions connOpts = setupMQTTClient(userName, password);
 		client.connect(connOpts).waitForCompletion();
 		
-		// Always subscribe after connection - remove the duplicate check for reconnections
-		client.subscribe(getSubscription(), 0);
-		currentSubscriptions.add(getSubscription()); // Track after successful subscription
-		logger.info("Monitor {} [{}] subscribed to {} {}", 
-			getName(), getDeviceIdentifier(), getSubscription(), client.getCurrentServerURI());
+		// Only subscribe if we haven't already subscribed to this topic
+		String subscription = getSubscription();
+		if (!currentSubscriptions.contains(subscription)) {
+			client.subscribe(subscription, 0);
+			currentSubscriptions.add(subscription);
+			logger.info("Monitor {} [{}] subscribed to {} {}", 
+				getName(), getDeviceIdentifier(), subscription, client.getCurrentServerURI());
+		} else {
+			logger.debug("Monitor {} [{}] already subscribed to {}", 
+				getName(), getDeviceIdentifier(), subscription);
+		}
 	}
 
 	/**
@@ -119,10 +129,13 @@ public abstract class AbstractMQTTMonitor {
 			client.connect(connOpts).waitForCompletion();
 			
 			for (String topic : topics) {
-				if (client != null) {
+				if (client != null && !currentSubscriptions.contains(topic)) {
 					client.subscribe(topic, 0);
+					currentSubscriptions.add(topic);
 					// Use getDeviceInfo() for logging
 					logger.info("Monitor {} [{}] subscribed to {} {}", clientId, getDeviceInfo(), topic, brokerUri);
+				} else if (currentSubscriptions.contains(topic)) {
+					logger.debug("Monitor {} [{}] already subscribed to {}", clientId, getDeviceInfo(), topic);
 				}
 			}
 		} catch (MqttException e) {

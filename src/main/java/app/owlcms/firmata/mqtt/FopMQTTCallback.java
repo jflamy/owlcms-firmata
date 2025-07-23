@@ -71,15 +71,27 @@ public class FopMQTTCallback implements MqttCallback {
                 entry -> (now - entry.getValue()) > 5000); // Remove entries older than 5 seconds
         }
 
-        // Continue with regular processing
-        if (ntopic.startsWith("owlcms/fop/") && ntopic.endsWith("/" + this.mqttMonitor.getName())) {
-            logger.debug("handling {} {}", ntopic, messageStr);
+        // Continue with regular processing - use current platform instead of stored name
+        String expectedPlatform = this.mqttMonitor.getCurrentPlatform();
+        if (expectedPlatform != null && ntopic.startsWith("owlcms/fop/") && ntopic.endsWith("/" + expectedPlatform)) {
+            logger.debug("{} handling {} {}", this.mqttMonitor.getDeviceInfo(), ntopic, messageStr);
             outputEventHandler.handle(simplifyTopic(ntopic), messageStr, board);
         } else if (ntopic.endsWith("/config")) {
             // ignore, is handled by ConfigMQTTCallback
         } else {
-            logger.error("{} Malformed MQTT unrecognized topic message topic='{}' message='{}'",
-                    this.mqttMonitor.getName(), topic, messageStr);
+            // Extract the platform from the received topic for better error reporting
+            String receivedPlatform = "unknown";
+            if (ntopic.startsWith("owlcms/fop/") && ntopic.lastIndexOf('/') > 10) {
+                receivedPlatform = ntopic.substring(ntopic.lastIndexOf('/') + 1);
+            }
+            
+            if (expectedPlatform == null) {
+                logger.warn("{} No platform selected - ignoring topic='{}' message='{}'",
+                        this.mqttMonitor.getDeviceInfo(), topic, messageStr);
+            } else {
+                logger.error("{} Malformed MQTT unrecognized topic message: expected platform '{}', received platform '{}', topic='{}' message='{}'",
+                        this.mqttMonitor.getDeviceInfo(), expectedPlatform, receivedPlatform, topic, messageStr);
+            }
         }
     }
 

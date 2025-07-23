@@ -6,6 +6,7 @@ import org.eclipse.paho.client.mqttv3.MqttPersistenceException;
 import org.slf4j.LoggerFactory;
 
 import app.owlcms.firmata.data.DeviceConfig;
+import app.owlcms.firmata.data.MQTTConfig;
 import app.owlcms.firmata.eventhandlers.OutputEventHandler;
 import app.owlcms.firmata.refdevice.RefDevice;
 import ch.qos.logback.classic.Level;
@@ -44,9 +45,23 @@ public class FopMQTTMonitor extends AbstractMQTTMonitor {
 		this.start(fopName);
 	}
 
+	/**
+	 * Get the current platform name from MQTTConfig instead of stored name
+	 * This ensures we always use the most up-to-date platform selection
+	 */
+	public String getCurrentPlatform() {
+		return MQTTConfig.getCurrent().getFop();
+	}
+
 	public void publishMqttMessageForFop(String topic, String message) throws MqttException, MqttPersistenceException {
-		topic = topic + "/" + getName();
-		publishMqttMessage(topic, message);
+		// Use current platform instead of stored name
+		String currentPlatform = getCurrentPlatform();
+		if (currentPlatform != null) {
+			topic = topic + "/" + currentPlatform;
+			publishMqttMessage(topic, message);
+		} else {
+			logger.warn("Cannot publish MQTT message - no platform selected");
+		}
 	}
 
 	@Override

@@ -32,7 +32,7 @@ public class ConfigMQTTCallback implements MqttCallback {
 
 	@Override
 	public void connectionLost(Throwable cause) {
-		logger.debug("{}lost connection to MQTT: {}", this.mqttMonitor.getName(), cause.getLocalizedMessage());
+		logger.debug("{} lost connection to MQTT: {}", this.mqttMonitor.getDeviceInfo(), cause.getLocalizedMessage());
 		// Reset deduplication state on connection loss
 		messageDedup = "";
 		messageTimeStamp = 0;

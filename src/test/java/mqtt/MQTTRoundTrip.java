@@ -81,7 +81,9 @@ public class MQTTRoundTrip {
 							new MqttMessage(Long.toString(before).getBytes(StandardCharsets.UTF_8)));
 				}
 				client.disconnect();
+				client.close(); // Properly close the client to prevent resource leaks
 			} catch (MqttException e) {
+				logger.error("MQTT error: {}", e.getMessage());
 			}
 		});
 		t1.start();

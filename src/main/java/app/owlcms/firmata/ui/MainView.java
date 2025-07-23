@@ -918,7 +918,10 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		connectButton.addClickListener(e -> handleMQTTConnection());
 
 		disconnectButton.addClickListener(e -> {
-			// Perform disconnection actions first
+			// First stop all running devices and update their UI
+			stopAllDevicesOnDisconnect();
+			
+			// Perform disconnection actions
 			try {
 				configMonitor.close(); // This is called by MQTTConfig.getCurrent().closeAll()
 				MQTTConfig.getCurrent().closeAll(); // This also sets internal connected flags to false
@@ -934,11 +937,19 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 			disconnectButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
 			connectButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
 			
-			// Clear platform information
+			// Clear platform information and reset UI
 			platformField.clear();
 			platformField.setItems(new ArrayList<String>());
-			// MQTTConfig.getCurrent().setFop(null); // closeAll() should handle clearing fop/fops
-			// MQTTConfig.getCurrent().saveSettings(); // Optionally save this cleared state if desired
+			
+			// Clear device UI since we're disconnected
+			if (portsDiv != null) {
+				portsDiv.removeAll();
+			}
+			deviceUIComponentsMap.clear();
+			
+			// Clear device configurations
+			MQTTConfig.getCurrent().getPortToConfig().clear();
+			MQTTConfig.getCurrent().getPortToFirmware().clear();
 
 			// Update UI messages and trigger general UI refresh
 			messageNotConnected(); // Explicitly set "not connected" message status
@@ -1284,37 +1295,44 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 	}
 
 	private void stopAllDevices() {
-		// Create a safe copy of device configs to avoid concurrent modification
-		List<DeviceConfig> devicesToStop = new ArrayList<>(MQTTConfig.getCurrent().getPortToConfig().values());
+        // Create a safe copy of device configs to avoid concurrent modification
+        List<DeviceConfig> devicesToStop = new ArrayList<>(MQTTConfig.getCurrent().getPortToConfig().values());
 
-		// Stop all running services
-		for (DeviceConfig deviceConfig : devicesToStop) {
-			if (deviceConfig.getFirmataService() != null) {
-				logger.info("Stopping device on port {} due to platform change",
-				        deviceConfig.getSerialPort());
+        // Stop all running services
+        for (DeviceConfig deviceConfig : devicesToStop) {
+            if (deviceConfig.getFirmataService() != null) {
+                logger.info("Stopping device on port {} due to platform change",
+                        deviceConfig.getSerialPort());
 
-				// Get the UI components for proper UI updates
-				DeviceUIComponents uiComponents = deviceUIComponentsMap.get(deviceConfig.getSerialPort());
-				if (uiComponents != null) {
-					UI ui = UI.getCurrent();
-					deviceConfig.getFirmataService().stopDevice(() -> {
-						if (ui != null) {
-							ui.access(() -> confirmStopOk(ui, uiComponents.startButton, uiComponents.stopButton));
-						}
-					});
-				} else {
-					// If UI components not found, just stop without UI updates
-					deviceConfig.getFirmataService().stopDevice(null);
-				}
-			}
-		}
+                // Get the UI components for proper UI updates
+                DeviceUIComponents uiComponents = deviceUIComponentsMap.get(deviceConfig.getSerialPort());
+                if (uiComponents != null) {
+                    UI ui = UI.getCurrent();
+                    deviceConfig.getFirmataService().stopDevice(() -> {
+                        if (ui != null) {
+                            ui.access(() -> confirmStopOk(ui, uiComponents.startButton, uiComponents.stopButton));
+                        }
+                    });
+                } else {
+                    // If UI components not found, just stop without UI updates
+                    deviceConfig.getFirmataService().stopDevice(null);
+                }
+                
+                // Ensure the device service is fully cleaned up
+                deviceConfig.setFirmataService(null);
+            }
+        }
 
-		// Post an update to refresh the UI
-		MQTTConfig.getCurrent().getUiEventBus().post(new UIEvent.ConfigsUpdated());
-	}
+        // Clear the device configs to force fresh detection
+        MQTTConfig.getCurrent().getPortToConfig().clear();
+        MQTTConfig.getCurrent().getPortToFirmware().clear();
+        
+        // Post an update to refresh the UI
+        MQTTConfig.getCurrent().getUiEventBus().post(new UIEvent.ConfigsUpdated());
+    }
 
 	/**
-	 * devices for platform '{}'", MQTTConfig.getCurrent().getFop()); Auto-start all devices with valid configurations
+	 * Auto-start all devices with valid configurations
 	 */
 	private void autoStartDevices(UI ui) {
 		if (!MQTTConfig.fullyConnected()) {
@@ -1405,5 +1423,46 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
     private void addFormItemX(Component c, String label) {
         var item = form.addFormItem(c, label);
         item.getElement().getStyle().set("--vaadin-form-item-label-width", "10em");
+    }
+
+	private void stopAllDevicesOnDisconnect() {
+        // Create a safe copy of device configs to avoid concurrent modification
+        List<DeviceConfig> devicesToStop = new ArrayList<>(MQTTConfig.getCurrent().getPortToConfig().values());
+
+        // Stop all running services and update UI
+        for (DeviceConfig deviceConfig : devicesToStop) {
+            if (deviceConfig.getFirmataService() != null && deviceConfig.getFirmataService().isRunning()) {
+                logger.info("Stopping device on port {} due to disconnect",
+                        deviceConfig.getSerialPort());
+
+                // Get the UI components for proper UI updates
+                DeviceUIComponents uiComponents = deviceUIComponentsMap.get(deviceConfig.getSerialPort());
+                if (uiComponents != null) {
+                    // Update UI immediately to show stopped state
+                    uiComponents.startButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
+                    uiComponents.stopButton.removeThemeVariants(ButtonVariant.LUMO_PRIMARY);
+                    uiComponents.startButton.setEnabled(false);
+                    uiComponents.stopButton.setEnabled(false);
+                    
+                    // Stop the device service
+                    deviceConfig.getFirmataService().stopDevice(() -> {
+                        logger.debug("Device stopped on port {}", deviceConfig.getSerialPort());
+                    });
+                } else {
+                    // If UI components not found, just stop without UI updates
+                    deviceConfig.getFirmataService().stopDevice(null);
+                }
+                
+                // Ensure the device service is fully cleaned up
+                deviceConfig.setFirmataService(null);
+            }
+        }
+
+        // Clear the device configs completely on disconnect
+        MQTTConfig.getCurrent().getPortToConfig().clear();
+        MQTTConfig.getCurrent().getPortToFirmware().clear();
+
+        // Post an update to refresh the UI
+        MQTTConfig.getCurrent().getUiEventBus().post(new UIEvent.ConfigsUpdated());
     }
 }
