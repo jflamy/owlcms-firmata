@@ -860,9 +860,10 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		});
 
 		var deviceSelectionTitle = new HorizontalLayout(
-		        new H3("Devices"),
-		        scanButton,
-		        new Text("Configuration files are located in " + ResourceWalker.getLocalDirPath().toString()));
+			new H3("Devices"),
+			scanButton,
+			new Text("Configuration files are located in " + ResourceWalker.getLocalDirPath().toAbsolutePath().toString()));
+
 		deviceSelectionTitle.setAlignItems(Alignment.BASELINE);
 		deviceSelectionTitle.getStyle().set("margin-top", SECTION_MARGIN_TOP);
 
