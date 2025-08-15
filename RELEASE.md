@@ -1,5 +1,6 @@
 ##### Changes since 2.0.0
 
+- 2.3.3: Show the full path to the device definition files.
 - 2.3.2: Fix subscription issues when Disconnecting and reconnecting to a server with different platform names
 - 2.3.1: Reset the platform list when doing a Disconnect/Connect
 - 2.3.0: Automatic connections
