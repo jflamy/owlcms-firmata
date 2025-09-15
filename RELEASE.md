@@ -1,4 +1,8 @@
-##### Changes since 2.0.0
+##### In this release
+
+- 2.4.0: Removed unneeded connections established at start-up.  This version should be used for clarity when using owlcms version 61 Connected MQTT devices status reporting.
+
+Since 2.0
 
 - 2.3.3: Show the full path to the device definition files.
 - 2.3.2: Fix subscription issues when Disconnecting and reconnecting to a server with different platform names
