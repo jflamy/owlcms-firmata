@@ -91,8 +91,8 @@ public class FirmataService {
 					board2.init();
 					this.setBoard(board2);
 					
-					// Create MQTT monitor with proper initialization
-					mqttMonitor = new FopMQTTMonitor(fopName, outputEventHandler, getBoard(), config);
+					// Create or reuse MQTT monitor for this device
+					mqttMonitor = FopMQTTMonitor.getOrCreate(fopName, outputEventHandler, getBoard(), config);
 				}
 
 				outputEventHandler.handle("fop/startup", "", getBoard());
@@ -121,6 +121,8 @@ public class FirmataService {
 		if (getBoard() != null) {
 			logger.info("closing device {}", serialPort);
 			getBoard().stop();
+			// remove monitor for this device
+			FopMQTTMonitor.removeForDevice(this.config);
 			running = false;
 			if (confirmation != null) {
 				confirmation.run();

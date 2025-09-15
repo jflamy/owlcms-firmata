@@ -112,8 +112,23 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		title.getStyle().set("margin-top", "0.5em");
 		add(title);
 
-		configMonitor = new ConfigMQTTMonitor();
-		MQTTConfig.getCurrent().setConfigMqttMonitor(configMonitor);
+		// Reuse existing static configMonitor if already running to avoid multiple
+		// clients using the same clientId (which would kick each other off the broker).
+		try {
+			if (configMonitor == null || !configMonitor.isConnected()) {
+				if (configMonitor != null) {
+					try { configMonitor.close(); } catch (Exception ignore) {}
+				}
+				configMonitor = new ConfigMQTTMonitor();
+			} else {
+				logger.debug("Reusing existing configMonitor instance");
+			}
+			MQTTConfig.getCurrent().setConfigMqttMonitor(configMonitor);
+		} catch (Throwable t) {
+			logger.warn("Failed to initialize or reuse configMonitor", t);
+			configMonitor = new ConfigMQTTMonitor();
+			MQTTConfig.getCurrent().setConfigMqttMonitor(configMonitor);
+		}
 
 		// Create warning messages for later use
 		createMessages();

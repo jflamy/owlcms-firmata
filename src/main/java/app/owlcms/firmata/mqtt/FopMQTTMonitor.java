@@ -26,6 +26,9 @@ import ch.qos.logback.classic.Logger;
  */
 public class FopMQTTMonitor extends AbstractMQTTMonitor {
 
+	// Registry to ensure one monitor per device identifier (serial port)
+	private static final java.util.concurrent.ConcurrentHashMap<String, FopMQTTMonitor> monitorsByDevice = new java.util.concurrent.ConcurrentHashMap<>();
+
 	private static final String OWLCMS_FOP = "owlcms/fop/#";
 	RefDevice board;
 	boolean closed;
@@ -34,8 +37,9 @@ public class FopMQTTMonitor extends AbstractMQTTMonitor {
 	// Add device config field to track which device this monitor is for
 	private DeviceConfig deviceConfig;
 
-	public FopMQTTMonitor(String fopName, OutputEventHandler emitDefinitionHandler, RefDevice board,
-	        DeviceConfig config) {
+	// Make constructor package-private; use factory method to ensure uniqueness
+	FopMQTTMonitor(String fopName, OutputEventHandler emitDefinitionHandler, RefDevice board,
+		DeviceConfig config) {
 		logger.setLevel(Level.DEBUG);
 		this.setName(fopName);
 		this.setSubscription(OWLCMS_FOP);
@@ -43,6 +47,26 @@ public class FopMQTTMonitor extends AbstractMQTTMonitor {
 		this.emitDefinitionHandler = emitDefinitionHandler;
 		this.deviceConfig = config;  // Store the device config
 		this.start(fopName);
+	}
+
+	/**
+	 * Factory that returns an existing monitor for the device serial if present,
+	 * otherwise creates, registers and returns a new one.
+	 */
+	public static FopMQTTMonitor getOrCreate(String fopName, OutputEventHandler emitDefinitionHandler, RefDevice board,
+			DeviceConfig config) {
+		String key = (config != null && config.getSerialPort() != null) ? config.getSerialPort() : fopName + "_unknown";
+		return monitorsByDevice.computeIfAbsent(key, k -> new FopMQTTMonitor(fopName, emitDefinitionHandler, board, config));
+	}
+
+	public static void removeForDevice(DeviceConfig config) {
+		if (config == null) return;
+		String key = config.getSerialPort();
+		if (key == null) return;
+		FopMQTTMonitor m = monitorsByDevice.remove(key);
+		if (m != null) {
+			try { m.close(); } catch (Exception ignore) {}
+		}
 	}
 
 	/**
@@ -88,10 +112,13 @@ public class FopMQTTMonitor extends AbstractMQTTMonitor {
 
 	@Override
 	protected String getDeviceIdentifier() {
-	    if (deviceConfig != null) {
-	        return deviceConfig.getDeviceTypeName() + " on " + deviceConfig.getSerialPort();
-	    }
-	    return getName() != null ? "Platform " + getName() : "Unknown device";
+		if (deviceConfig != null) {
+			String type = deviceConfig.getDeviceTypeName() != null ? deviceConfig.getDeviceTypeName() : "device";
+			String port = deviceConfig.getSerialPort() != null ? deviceConfig.getSerialPort() : "port";
+			// Provide a concise parseable identifier: type_serial
+			return type + "_" + port;
+		}
+		return getName() != null ? "platform_" + getName() : "unknown_device";
 	}
 
 }

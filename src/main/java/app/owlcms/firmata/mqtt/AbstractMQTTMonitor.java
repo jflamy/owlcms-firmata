@@ -32,6 +32,8 @@ public abstract class AbstractMQTTMonitor {
 	// Store the clientId and brokerUri for logging since we need it in multiple places
 	protected String clientId;
 	protected String brokerUri;
+	// prevent multiple concurrent starts
+	private volatile boolean startedFlag = false;
 	// Add tracking of subscriptions to avoid duplicates
 	private final Set<String> currentSubscriptions = new HashSet<>();
 
@@ -46,6 +48,7 @@ public abstract class AbstractMQTTMonitor {
 			currentSubscriptions.clear();
 			client.disconnect();
 			client.close();
+			startedFlag = false;
 		} catch (MqttException e) {
 			logger.error("cannot close client {}", e.getMessage());
 		}
@@ -53,26 +56,34 @@ public abstract class AbstractMQTTMonitor {
 
 	public boolean connectionLoop(MqttAsyncClient mqttAsyncClient) {
 		//logger.debug("connection loop {}", LoggerUtils.stackTrace());
-		int i = 0;
+		int attempt = 0;
 		setClosed(false);
+		long backoffMs = 500L; // start with 500ms
+		final long MAX_BACKOFF_MS = 30_000L; // cap at 30s
 		while (!mqttAsyncClient.isConnected() && !isClosed()) {
 			try {
 				// Clear subscriptions on connection loss to allow re-subscription
-				if (i > 0) {
+				if (attempt > 0) {
 					currentSubscriptions.clear();
 				}
 				// doConnect will generate a new client Id, and wait for completion
 				doConnect();
+				// reset backoff on success
+				backoffMs = 500L;
 			} catch (Exception e) {
-				if (i == 0) {
+				if (attempt == 0) {
 					logger.error("{}", e.getMessage(),
-					        e.getCause() != null ? e.getCause().getMessage() : e);
+							e.getCause() != null ? e.getCause().getMessage() : e);
+				} else {
+					logger.debug("connection attempt {} failed: {}", attempt, e.getMessage());
 				}
+				// sleep with backoff before retrying
+				sleep((int) backoffMs);
+				backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs * 2);
 			}
-			sleep(1000);
-			i++;
+			attempt++;
 		}
-		return false;
+		return mqttAsyncClient.isConnected();
 	}
 
 	public MqttAsyncClient createMQTTClient(String fopName) throws MqttException {
@@ -83,17 +94,58 @@ public abstract class AbstractMQTTMonitor {
 		String protocol = port.startsWith("8") ? "ssl://" : "tcp://";
 		Main.getStartupLogger().info("connecting to MQTT {}{}:{}", protocol, server, port);
 
+	// Build a parseable client id that includes the device identifier so it is one-per-device.
+	String devicePart = sanitizeClientIdPart(getDeviceIdentifier());
+	String genClientId = fopName + "_" + devicePart;
 		client = new MqttAsyncClient(protocol + server + ":" + port,
-		        fopName + "_f_" + System.currentTimeMillis(), // ClientId
+		        genClientId, // ClientId
 		        new MemoryPersistence()); // Persistence
+
+		// Log where the client was created from (caller hint)
+		StackTraceElement[] st = Thread.currentThread().getStackTrace();
+		String caller = st.length > 3 ? st[3].toString() : "(unknown)";
+		logger.info("Created MQTT client {} for fop='{}' (caller={})", genClientId, fopName, caller);
 		return client;
+	}
+
+	/**
+	 * Turn a device identifier into a small parseable token safe for MQTT client IDs.
+	 * Replaces non-alphanumeric characters with '_' and lower-cases the result.
+	 * Truncates to a reasonable length to avoid extremely long client ids.
+	 */
+	private String sanitizeClientIdPart(String raw) {
+		if (raw == null) {
+			return "unknown_device";
+		}
+		// Replace any character that is not a letter, number, dash or underscore
+		String cleaned = raw.replaceAll("[^A-Za-z0-9_-]+", "_").toLowerCase();
+		// Trim leading/trailing underscores
+		cleaned = cleaned.replaceAll("^_+|_+$", "");
+		if (cleaned.isEmpty()) {
+			return "device";
+		}
+		// Limit length to 40 characters to keep client id compact
+		if (cleaned.length() > 40) {
+			cleaned = cleaned.substring(0, 40);
+		}
+		return cleaned;
 	}
 	
 	public void doConnect() throws MqttSecurityException, MqttException {
 		userName = MQTTConfig.getCurrent().getMqttUsername();
 		password = MQTTConfig.getCurrent().getMqttPassword();
 		MqttConnectOptions connOpts = setupMQTTClient(userName, password);
-		client.connect(connOpts).waitForCompletion();
+		try {
+			String cid = client != null ? client.getClientId() : "(null)";
+			String uri = client != null ? client.getServerURI() : "(null)";
+			logger.info("Attempting MQTT connect: clientId={} serverURI={}", cid, uri);
+			client.connect(connOpts).waitForCompletion();
+			logger.info("MQTT connected: clientId={} serverURI={}", cid, uri);
+		} catch (MqttException me) {
+			logger.error("MQTT connect failed for client {}: {}", client != null ? client.getClientId() : "(null)", me.toString());
+			logger.debug("MQTT connect exception", me);
+			throw me;
+		}
 		
 		// Only subscribe if we haven't already subscribed to this topic
 		String subscription = getSubscription();
@@ -204,17 +256,30 @@ public abstract class AbstractMQTTMonitor {
 		this.subscription = subscription;
 	}
 
-	public void start(String fopName) {
+	public synchronized void start(String fopName) {
+		if (startedFlag) {
+			logger.debug("start() called but monitor already started for fop='{}'", fopName);
+			return;
+		}
+		String mqttServer = MQTTConfig.getCurrent().getMqttServer();
+		if (mqttServer == null || mqttServer.isBlank()) {
+			logger.info("no MQTT server configured, skipping");
+			return;
+		}
+
+		// Mark as started to prevent concurrent start attempts creating multiple clients
+		startedFlag = true;
 		try {
-			String mqttServer = MQTTConfig.getCurrent().getMqttServer();
-			if (mqttServer != null && !mqttServer.isBlank()) {
-				client = createMQTTClient(fopName);
-				connectionLoop(client);
-			} else {
-				logger.info("no MQTT server configured, skipping");
-			}
+			logger.info("Starting MQTT monitor for fop='{}'", fopName);
+			client = createMQTTClient(fopName);
+			connectionLoop(client);
 		} catch (MqttException e) {
 			logger.error("cannot initialize MQTT: {}", e);
+			// allow retries in future start attempts
+			startedFlag = false;
+		} catch (Throwable t) {
+			logger.error("unexpected error while starting MQTT monitor: {}", t.toString());
+			startedFlag = false;
 		}
 	}
 	
@@ -224,6 +289,7 @@ public abstract class AbstractMQTTMonitor {
 			currentSubscriptions.clear();
 			client.disconnect();
 			client.close();
+			startedFlag = false;
 		} catch (MqttException e) {
 			logger.error("cannot close: {}", e);
 		}
