@@ -13,6 +13,7 @@ import org.junit.Test;
 import org.slf4j.LoggerFactory;
 
 import ch.qos.logback.classic.Logger;
+import app.owlcms.firmata.utils.WebSocketProtocol;
 
 public class MQTTRoundTrip {
 	private static final String OWLCMS_FOP = "owlcms/test/#";
@@ -42,10 +43,16 @@ public class MQTTRoundTrip {
 	public static MqttClient createMQTTClient(String fopName) throws MqttException {
 		String server = "127.0.0.1";
 		String port =  "1883";
-		String protocol = port.startsWith("8") ? "ssl://" : "tcp://";
-		logger.info("connecting to MQTT {}{}:{}", protocol, server, port);
+		String proto = WebSocketProtocol.selectProtocol(port);
+		String brokerUri;
+		if ("ws".equals(proto) || "wss".equals(proto)) {
+			brokerUri = WebSocketProtocol.buildUrl(server, port);
+		} else {
+			brokerUri = "tcp://" + server + ":" + port;
+		}
+		logger.info("connecting to MQTT {}", brokerUri);
 
-		MqttClient client = new MqttClient(protocol + server + ":" + port,
+		MqttClient client = new MqttClient(brokerUri,
 				fopName + "_" + MqttClient.generateClientId(), // ClientId
 				new MemoryPersistence()); // Persistence
 		return client;

@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 
 import app.owlcms.firmata.data.MQTTConfig;  // Update import to use data package version
 import app.owlcms.firmata.ui.Main;
+import app.owlcms.firmata.utils.WebSocketProtocol;
 import ch.qos.logback.classic.Logger;
 
 public abstract class AbstractMQTTMonitor {
@@ -91,13 +92,21 @@ public abstract class AbstractMQTTMonitor {
 		server = (server != null ? server : "127.0.0.1");
 		String port = MQTTConfig.getCurrent().getMqttPort();
 		port = (port != null ? port : "1883");
-		String protocol = port.startsWith("8") ? "ssl://" : "tcp://";
-		Main.getStartupLogger().info("connecting to MQTT {}{}:{}", protocol, server, port);
+		// Decide broker URI based on port rules (ws/wss for websocket ports, mqtt -> tcp)
+		String proto = WebSocketProtocol.selectProtocol(port);
+		String brokerUri;
+		if ("ws".equals(proto) || "wss".equals(proto)) {
+			brokerUri = WebSocketProtocol.buildUrl(server, port);
+		} else {
+			// plain MQTT over TCP
+			brokerUri = "tcp://" + server + ":" + port;
+		}
+		Main.getStartupLogger().info("connecting to MQTT {}", brokerUri);
 
 	// Build a parseable client id that includes the device identifier so it is one-per-device.
 	String devicePart = sanitizeClientIdPart(getDeviceIdentifier());
 	String genClientId = fopName + "_" + devicePart;
-		client = new MqttAsyncClient(protocol + server + ":" + port,
+		client = new MqttAsyncClient(brokerUri,
 		        genClientId, // ClientId
 		        new MemoryPersistence()); // Persistence
 
@@ -305,7 +314,12 @@ public abstract class AbstractMQTTMonitor {
 			connOpts.setPassword(password.toCharArray());
 		}
 		connOpts.setCleanSession(true);
-		// connOpts.setAutomaticReconnect(true);
+		// Use sane MQTT connection defaults
+		connOpts.setKeepAliveInterval(60); // seconds
+		connOpts.setConnectionTimeout(30); // seconds for TCP connect
+		connOpts.setAutomaticReconnect(true);
+		logger.debug("MQTT connect options: keepAlive={}s, timeout={}s, autoReconnect={}",
+				connOpts.getKeepAliveInterval(), connOpts.getConnectionTimeout(), true);
 		return connOpts;
 	}
 
