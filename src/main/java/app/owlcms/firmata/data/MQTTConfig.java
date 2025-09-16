@@ -15,6 +15,11 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 import org.firmata4j.firmata.FirmataDevice;
@@ -291,48 +296,72 @@ public class MQTTConfig {
 		List<SerialPort> serialPorts = getSerialPorts();
 		logger.info("Starting firmware detection on {} ports", serialPorts.size());
 		
+		// Use a small thread pool to probe ports in parallel with timeouts so a single
+		// slow/blocked port cannot stall the whole detection loop.
+		int poolSize = Math.min(serialPorts.size(), 4);
+		ExecutorService probeExecutor = Executors.newFixedThreadPool(poolSize);
+		final int probeTimeoutSec = 10; // seconds per port
 		for (SerialPort sp : serialPorts) {
 			FirmataDevice device = null;
+			String systemPortName = sp.getSystemPortName();
+			logger.debug("Checking port: {}", systemPortName);
 			try {
-				String systemPortName = sp.getSystemPortName();
-				logger.debug("Checking port: {}", systemPortName);
-				
 				// Set up device with proper transport
 				device = new FirmataDevice(new JSerialCommTransport(systemPortName));
-				
-				// Start device with timeout
-				long startTime = System.currentTimeMillis();
-				device.start();
-				logger.debug("Device start initiated on port {}", systemPortName);
-				
-				// Use ensureInitializationIsDone without timeout (already handled internally)
+
+				final FirmataDevice deviceRef = device;
+				logger.info("Starting probe on port {}", systemPortName);
+
+				Callable<String> probeTask = () -> {
+					long startTime = System.currentTimeMillis();
+					deviceRef.start();
+					logger.debug("Device start initiated on port {}", systemPortName);
+					try {
+						deviceRef.ensureInitializationIsDone();
+						logger.debug("Device initialization complete on port {}", systemPortName);
+						String firmware = deviceRef.getFirmware();
+						if (firmware != null) firmware = firmware.replace(".ino", "");
+						logger.info("Found firmware '{}' on port {} (took {}ms)", firmware, systemPortName,
+								System.currentTimeMillis() - startTime);
+						return firmware;
+					} finally {
+						try {
+							deviceRef.stop();
+						} catch (IOException stopEx) {
+							LoggerUtils.logError(logger, stopEx);
+						}
+					}
+				};
+
+				Future<String> future = probeExecutor.submit(probeTask);
 				try {
-					device.ensureInitializationIsDone();
-					logger.debug("Device initialization complete on port {}", systemPortName);
-					
-					String firmware = device.getFirmware();
-					firmware = firmware.replace(".ino", ""); // Ensure .ino is stripped
-					logger.info("Found firmware '{}' on port {} (took {}ms)", 
-							firmware, systemPortName, System.currentTimeMillis() - startTime);
-					portToFirmware.put(systemPortName, firmware);
-				} catch (Exception e) { // Catch more general exceptions from ensureInitializationIsDone
-					logger.debug("Device initialization failed on port {}: {}", 
-						systemPortName, e.getMessage());
+					String firmware = future.get(probeTimeoutSec, TimeUnit.SECONDS);
+					if (firmware != null) {
+						portToFirmware.put(systemPortName, firmware);
+					}
+				} catch (TimeoutException te) {
+					logger.warn("Probe timed out on port {} after {}s", systemPortName, probeTimeoutSec);
+					future.cancel(true);
+					try {
+						if (device != null) device.stop();
+					} catch (IOException stopEx) {
+						LoggerUtils.logError(logger, stopEx);
+					}
 				}
 			} catch (Exception e) { // Catch broader exceptions from device creation/start
-				logger.debug("Could not detect firmware on port {}: {}", 
-					sp.getSystemPortName(), e.getMessage());
-			} finally {
-				try {
-					if (device != null) {
+				logger.debug("Could not detect firmware on port {}: {}", systemPortName, e.getMessage());
+				if (device != null) {
+					try {
 						device.stop();
+					} catch (IOException stopEx) {
+						LoggerUtils.logError(logger, stopEx);
 					}
-				} catch (IOException e1) {
-					LoggerUtils.logError(logger, e1);
 				}
+			} finally {
 				progressUpdate.accept(++i);
 			}
 		}
+		probeExecutor.shutdownNow();
 		
 		logger.info("Completed firmware detection, found {} devices", portToFirmware.size());
 		return portToFirmware;
