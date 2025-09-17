@@ -98,7 +98,7 @@ public abstract class AbstractMQTTMonitor {
 		if ("ws".equals(proto) || "wss".equals(proto)) {
 			brokerUri = WebSocketProtocol.buildUrl(server, port);
 		} else {
-			// plain MQTT over TCP
+			// plain MQTT over TCP (Paho expects tcp:// or ssl:// for non-websocket transports)
 			brokerUri = "tcp://" + server + ":" + port;
 		}
 		Main.getStartupLogger().info("connecting to MQTT {}", brokerUri);

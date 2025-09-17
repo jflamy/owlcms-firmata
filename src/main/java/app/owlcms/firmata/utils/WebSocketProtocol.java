@@ -18,11 +18,21 @@ public final class WebSocketProtocol {
         String p = port.trim();
         if (p.endsWith("443")) {
             return "wss";
-        } else if (p.startsWith("8")) {
-            return "ws";
-        } else {
+        }
+
+        // Explicitly treat standard MQTT ports as plain MQTT (TCP), not websockets
+        // Common MQTT ports: 1883 (plain), 8883 (secure)
+        if ("1883".equals(p) || "8883".equals(p)) {
             return "mqtt";
         }
+
+        // Ports that commonly indicate a websocket listener often start with '8' (e.g. 8080, 8000)
+        if (p.startsWith("8")) {
+            return "ws";
+        }
+
+        // Default to plain MQTT for any other ports
+        return "mqtt";
     }
 
     public static String selectProtocol(int port) {

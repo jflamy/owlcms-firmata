@@ -41,4 +41,10 @@ public class WebSocketProtocolTest {
         Assert.assertEquals("mqtt://example.com:1234", WebSocketProtocol.buildUrl("example.com", "1234"));
         Assert.assertNull(WebSocketProtocol.buildUrl(null, "8080"));
     }
+
+    @Test
+    public void testStandardMqttPorts() {
+        Assert.assertEquals("mqtt", WebSocketProtocol.selectProtocol("1883"));
+        Assert.assertEquals("mqtt", WebSocketProtocol.selectProtocol("8883"));
+    }
 }
