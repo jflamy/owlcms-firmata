@@ -21,7 +21,7 @@ public final class WebSocketProtocol {
         }
 
         // Explicitly treat standard MQTT ports as plain MQTT (TCP), not websockets
-        // Common MQTT ports: 1883 (plain), 8883 (secure)
+        // Common MQTT ports: 1883 (plain)
         if ("1883".equals(p)) {
             return "mqtt";
         }

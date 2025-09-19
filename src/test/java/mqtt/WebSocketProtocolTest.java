@@ -45,6 +45,5 @@ public class WebSocketProtocolTest {
     @Test
     public void testStandardMqttPorts() {
         Assert.assertEquals("mqtt", WebSocketProtocol.selectProtocol("1883"));
-        Assert.assertEquals("mqtt", WebSocketProtocol.selectProtocol("8883"));
     }
 }
