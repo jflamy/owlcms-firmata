@@ -14,7 +14,7 @@ public final class WebSocketProtocol {
     }
 
     public static String selectProtocol(String port) {
-        if (port == null) return null;
+        if (port == null) return "mqtt";
         String p = port.trim();
         if (p.endsWith("443")) {
             return "wss";
@@ -22,7 +22,7 @@ public final class WebSocketProtocol {
 
         // Explicitly treat standard MQTT ports as plain MQTT (TCP), not websockets
         // Common MQTT ports: 1883 (plain), 8883 (secure)
-        if ("1883".equals(p) || "8883".equals(p)) {
+        if ("1883".equals(p)) {
             return "mqtt";
         }
 

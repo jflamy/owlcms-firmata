@@ -1,6 +1,6 @@
 ##### In this release
 
-- 2.5.0: If the port specified is 443 or 8443, the connection will be done using wss: to the /mqtt entry point. This is to support the use of MQTT devices on a cloud server.  If the port is 8* (but not 8443) the connection will be using ws:.  Other ports, like the usual 1883 will use mqtt
+- 2.5.0: If the port specified ends with 443, the connection will be done using `wss:` to the /mqtt entry point. This is to support the use of MQTT devices on a cloud server.  If the port starts with 8 the connection will be using `ws:`.  Other ports, like the usual 1883 will use `mqtt`
 
 Since 2.0
 
