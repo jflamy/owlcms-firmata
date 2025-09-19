@@ -1,9 +1,10 @@
 ##### In this release
 
-- 2.4.0: Removed unneeded connections established at start-up.  This version should be used for clarity when using owlcms version 61 Connected MQTT devices status reporting.
+- 2.5.0: If the port specified is 443 or 8443, the connection will be done using wss: to the /mqtt entry point. This is to support the use of MQTT devices on a cloud server.  If the port is 8* (but not 8443) the connection will be using ws:.  Other ports, like the usual 1883 will use mqtt
 
 Since 2.0
 
+- 2.4.0: Removed unneeded connections established at start-up.  This version should be used for clarity when using owlcms version 61 Connected MQTT devices status reporting.
 - 2.3.3: Show the full path to the device definition files.
 - 2.3.2: Fix subscription issues when Disconnecting and reconnecting to a server with different platform names
 - 2.3.1: Reset the platform list when doing a Disconnect/Connect
