@@ -55,7 +55,7 @@ public abstract class AbstractMQTTMonitor {
 		}
 	}
 
-	public boolean connectionLoop(MqttAsyncClient mqttAsyncClient) {
+	public boolean connectionLoop(MqttAsyncClient mqttAsyncClient) throws MqttSecurityException {
 		//logger.debug("connection loop {}", LoggerUtils.stackTrace());
 		int attempt = 0;
 		setClosed(false);
@@ -71,6 +71,11 @@ public abstract class AbstractMQTTMonitor {
 				doConnect();
 				// reset backoff on success
 				backoffMs = 500L;
+			} catch (MqttSecurityException e) {
+				// Security exceptions (bad credentials or "Already connected" = auth failure)
+				// should not be retried - log and immediately rethrow
+				logger.error("MQTT security exception - aborting connection: {}", e.getMessage(), e);
+				throw e;
 			} catch (Exception e) {
 				if (attempt == 0) {
 					logger.error("{}", e.getMessage(),
@@ -150,7 +155,23 @@ public abstract class AbstractMQTTMonitor {
 			logger.info("Attempting MQTT connect: clientId={} serverURI={}", cid, uri);
 			client.connect(connOpts).waitForCompletion();
 			logger.info("MQTT connected: clientId={} serverURI={}", cid, uri);
+		} catch (MqttSecurityException mse) {
+			// Real security exception from Paho (bad credentials)
+			logger.error("MQTT security exception (bad credentials): {}", mse.getMessage());
+			throw mse;
 		} catch (MqttException me) {
+			// "Already connected" typically indicates authentication failure with WebSocket
+			// Check both the exception message and cause message
+			String fullMessage = me.toString();
+			Throwable cause = me.getCause();
+			if (cause != null) {
+				fullMessage += " | " + cause.toString();
+			}
+			
+			if (fullMessage.contains("Already connected")) {
+				logger.error("Connection already in progress or failed auth - treating as security error: {}", fullMessage);
+				throw new MqttSecurityException(4); // Code 4 = connection lost (repurposed for auth failure)
+			}
 			logger.error("MQTT connect failed for client {}: {}", client != null ? client.getClientId() : "(null)", me.toString());
 			logger.debug("MQTT connect exception", me);
 			throw me;
@@ -265,7 +286,7 @@ public abstract class AbstractMQTTMonitor {
 		this.subscription = subscription;
 	}
 
-	public synchronized void start(String fopName) {
+	public synchronized void start(String fopName) throws MqttSecurityException {
 		if (startedFlag) {
 			logger.debug("start() called but monitor already started for fop='{}'", fopName);
 			return;
@@ -282,6 +303,11 @@ public abstract class AbstractMQTTMonitor {
 			logger.info("Starting MQTT monitor for fop='{}'", fopName);
 			client = createMQTTClient(fopName);
 			connectionLoop(client);
+		} catch (MqttSecurityException e) {
+			// Rethrow security exceptions immediately - don't retry
+			logger.error("MQTT security exception for fop='{}': {}", fopName, e.getMessage());
+			startedFlag = false;
+			throw e;
 		} catch (MqttException e) {
 			logger.error("cannot initialize MQTT: {}", e);
 			// allow retries in future start attempts

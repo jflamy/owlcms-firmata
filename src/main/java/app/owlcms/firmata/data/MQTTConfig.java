@@ -266,6 +266,9 @@ public class MQTTConfig {
 			mqttPort = mqttPortProp != null ? mqttPortProp : mqttPort;
 			String mqttUsernameProp = p.getProperty("mqttUsername");
 			mqttUsername = mqttUsernameProp != null ? mqttUsernameProp : mqttUsername;
+			// read mqttPassword even though we don't save it, for debugging purposes
+			String mqttPasswordProp = p.getProperty("mqttPassword");
+			mqttPassword = mqttPasswordProp != null ? mqttPasswordProp : mqttPassword;
 			// Load platform (fop) from settings
 			// Do not call setFop here to avoid recursive save during read
 			this.fop = p.getProperty("fop"); 

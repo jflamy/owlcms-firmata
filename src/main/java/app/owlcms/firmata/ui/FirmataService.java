@@ -92,7 +92,14 @@ public class FirmataService {
 					this.setBoard(board2);
 					
 					// Create or reuse MQTT monitor for this device
-					mqttMonitor = FopMQTTMonitor.getOrCreate(fopName, outputEventHandler, getBoard(), config);
+					// May throw MqttSecurityException if credentials are invalid
+					try {
+						mqttMonitor = FopMQTTMonitor.getOrCreate(fopName, outputEventHandler, getBoard(), config);
+					} catch (org.eclipse.paho.client.mqttv3.MqttSecurityException e) {
+						// Security error - propagate to UI via error callback
+						logger.error("MQTT security exception during device startup: {}", e.getMessage());
+						throw e;
+					}
 				}
 
 				outputEventHandler.handle("fop/startup", "", getBoard());

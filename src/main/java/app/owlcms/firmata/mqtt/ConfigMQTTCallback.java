@@ -40,7 +40,12 @@ public class ConfigMQTTCallback implements MqttCallback {
 		messageDedup = "";
 		messageTimeStamp = 0;
 		// Called when the client lost the connection to the broker
-		this.mqttMonitor.connectionLoop(this.mqttMonitor.client);
+		try {
+			this.mqttMonitor.connectionLoop(this.mqttMonitor.client);
+		} catch (org.eclipse.paho.client.mqttv3.MqttSecurityException e) {
+			// Security exceptions should not be retried - log and stop
+			logger.error("MQTT security exception in connectionLost callback: {}", e.getMessage());
+		}
 	}
 
 	@Override

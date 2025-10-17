@@ -221,6 +221,13 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 			}
 			// Trigger UI refresh for device configs
 			eventDeviceConfigs(new UIEvent.ConfigsUpdated());
+		} catch (org.eclipse.paho.client.mqttv3.MqttSecurityException e) {
+			// Security exception (bad username/password) - show error and let user correct
+			logger.error("MQTT security exception: {}", e.getMessage());
+			UI.getCurrent().access(() -> {
+				messageSecurityError(e.getMessage());
+			});
+			eventDeviceConfigs(new UIEvent.ConfigsUpdated()); // Refresh UI after error
 		} catch (Exception e1) {
 			logger.warn("Auto-connect direct attempt failed: {}. Falling back to connection sequence.", e1.getMessage());
 			UI.getCurrent().access(this::messageConnectionError); // Show error before sequence
@@ -714,6 +721,20 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		platformSelectionWarning.setVisible(true);
 	}
 
+	private void messageSecurityError(String errorMessage) {
+		String message = "\u26a0 MQTT Connection Failed";
+		if (errorMessage != null && !errorMessage.isEmpty()) {
+			message += ": " + errorMessage;
+		}
+		failedConnectionWarning.setText(message);
+		failedConnectionWarning.setVisible(true);
+		fullyConnectedWarning.setVisible(true);
+		platformSelectionWarning.setText("""
+		                                 \u26a0 Please check your MQTT server settings and try again.
+		                                 """);
+		platformSelectionWarning.setVisible(true);
+	}
+
 	private void messageNoPlatform() {
 		failedConnectionWarning.setVisible(false);
 		;
@@ -740,8 +761,28 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 		logger.error("could not start {}", ex.toString());
 		ui.access(() -> {
 			ConfirmDialog dialog = new ConfirmDialog();
-			dialog.setHeader("Device Initialization Failed");
-			dialog.setText(new Html("<p>" + ex.getCause().getMessage().toString() + "</p>"));
+			String errorMessage;
+			
+			// Check if this is a security exception
+			if (ex instanceof org.eclipse.paho.client.mqttv3.MqttSecurityException ||
+			    (ex.getCause() != null && ex.getCause() instanceof org.eclipse.paho.client.mqttv3.MqttSecurityException)) {
+				dialog.setHeader("MQTT Connection Failed");
+				errorMessage = ex.getMessage();
+				if (errorMessage == null || errorMessage.isEmpty()) {
+					errorMessage = ex.getCause() != null ? ex.getCause().getMessage() : ex.toString();
+				}
+				if (errorMessage == null || errorMessage.isEmpty()) {
+					errorMessage = "Authentication or connection error. Please check your MQTT server settings.";
+				}
+			} else {
+				dialog.setHeader("Device Initialization Failed");
+				errorMessage = ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage();
+				if (errorMessage == null || errorMessage.isEmpty()) {
+					errorMessage = ex.toString();
+				}
+			}
+			
+			dialog.setText(new Html("<p>" + errorMessage + "</p>"));
 			dialog.setConfirmText("OK");
 			dialog.open();
 		});
@@ -1088,6 +1129,13 @@ public class MainView extends VerticalLayout implements SafeEventBusRegistration
 				messageNotConnected(); 
 				tryConnectionSequence(serverToAttemptConnectionWith); 
 			}
+		} catch (org.eclipse.paho.client.mqttv3.MqttSecurityException e) {
+			logger.error("MQTT security exception during connection to {}: {}", serverToAttemptConnectionWith, e.getMessage());
+			if (uiFieldCausedConfigChangeForAttempt) {
+				MQTTConfig.getCurrent().setMqttServer(initialServerInConfig); 
+				logger.info("Reverted server address in config to: {} after security exception.", initialServerInConfig);
+			}
+			messageSecurityError(e.getMessage());
 		} catch (Exception e) {
 			logger.warn("Connection attempt to {} failed: {}", serverToAttemptConnectionWith, e.getMessage());
 			if (uiFieldCausedConfigChangeForAttempt) {

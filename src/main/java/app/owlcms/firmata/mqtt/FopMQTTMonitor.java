@@ -39,7 +39,7 @@ public class FopMQTTMonitor extends AbstractMQTTMonitor {
 
 	// Make constructor package-private; use factory method to ensure uniqueness
 	FopMQTTMonitor(String fopName, OutputEventHandler emitDefinitionHandler, RefDevice board,
-		DeviceConfig config) {
+		DeviceConfig config) throws org.eclipse.paho.client.mqttv3.MqttSecurityException {
 		logger.setLevel(Level.DEBUG);
 		this.setName(fopName);
 		this.setSubscription(OWLCMS_FOP);
@@ -52,11 +52,19 @@ public class FopMQTTMonitor extends AbstractMQTTMonitor {
 	/**
 	 * Factory that returns an existing monitor for the device serial if present,
 	 * otherwise creates, registers and returns a new one.
+	 * Throws MqttSecurityException if credential validation fails during initial connection.
 	 */
 	public static FopMQTTMonitor getOrCreate(String fopName, OutputEventHandler emitDefinitionHandler, RefDevice board,
-			DeviceConfig config) {
+			DeviceConfig config) throws org.eclipse.paho.client.mqttv3.MqttSecurityException {
 		String key = (config != null && config.getSerialPort() != null) ? config.getSerialPort() : fopName + "_unknown";
-		return monitorsByDevice.computeIfAbsent(key, k -> new FopMQTTMonitor(fopName, emitDefinitionHandler, board, config));
+		FopMQTTMonitor existing = monitorsByDevice.get(key);
+		if (existing != null) {
+			return existing;
+		}
+		// Create new monitor - may throw MqttSecurityException
+		FopMQTTMonitor newMonitor = new FopMQTTMonitor(fopName, emitDefinitionHandler, board, config);
+		monitorsByDevice.put(key, newMonitor);
+		return newMonitor;
 	}
 
 	public static void removeForDevice(DeviceConfig config) {
