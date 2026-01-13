@@ -6,6 +6,7 @@
         "**/.settings": true,
         "**/.factorypath": true
     },
+
     // Java performance and autobuild
     "java.autobuild.enabled": true,
     "java.autobuild.annotation.processing.enabled": false,
