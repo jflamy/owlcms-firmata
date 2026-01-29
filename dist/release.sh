@@ -49,7 +49,7 @@ git add --all
 git commit -m $TAG
 git push
 gh release delete $TAG -y
-gh release create $TAG --notes-file ../RELEASE.md -t "owlcms-firmata $TAG"
+gh release create $TAG --notes-file ../ReleaseNotes.md -t "owlcms-firmata $TAG"
 gh release upload $TAG *.exe
 #find ../diagrams -name '*.xlsx' -print0 | xargs -0 -n 1 gh release upload --clobber $TAG
 gh release upload $TAG files/owlcms-firmata.jar
