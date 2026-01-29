@@ -1,9 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Testing/development logback file, writes to CONSOLE -->
+<!-- Production logback file, writes to logs/owlcms-firmata.log -->
 <configuration scan="true" debug="false">
 
     <!-- Stop output INFO at start -->
     <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/owlcms-firmata.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <!-- daily rollover -->
+            <fileNamePattern>logs/owlcms-firmata_%d{yyyy-MM-dd}.log</fileNamePattern>
+        </rollingPolicy>
+        <encoder>
+            <charset>UTF-8</charset>
+            <pattern>
+                %d{HH:mm:ss.SSS} %-5level %-75msg [%logger{100}:%L %M]%n
+            </pattern>
+        </encoder>
+    </appender>
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <target>System.out</target>
@@ -11,6 +25,18 @@
             <charset>UTF-8</charset>
             <pattern>
                 %d{HH:mm:ss.SSS} %-5level %-75msg [%logger{100}:%L %M]%n
+            </pattern>
+        </encoder>
+    </appender>
+
+    <!-- Startup log appender for control panel feedback -->
+    <appender name="STARTUP_FILE" class="ch.qos.logback.core.FileAppender">
+        <file>logs/startup.log</file>
+        <append>false</append>
+        <encoder>
+            <charset>UTF-8</charset>
+            <pattern>
+                %d{HH:mm:ss} %msg%n
             </pattern>
         </encoder>
     </appender>
@@ -28,13 +54,25 @@
     <logger name="com.vaadin" level="INFO" />
     <logger name="org.firmata4j.firmata.FirmataDevice" level="INFO" />
 
-    <!-- by default log all info to console; warnings and above unless logger specifies other level -->
+    <!-- by default log all info to file and console; warnings and above unless logger specifies other level -->
     <root level="WARN">
+        <appender-ref ref="FILE" />
         <appender-ref ref="CONSOLE" />
     </root>
     
-    <!-- turn off simplified user-friendly messages shown at startup when using java.exe -->
-    <logger name="app.owlcms.Main.startup" level="OFF" />
+    <!-- Startup logger - enabled for control panel (writes to startup.log) -->
+    <if condition='isDefined("OWLCMS_CONTROLPANEL")'>
+        <then>
+            <logger name="app.owlcms.Main.startup" level="INFO" additivity="false">
+                <appender-ref ref="STARTUP_FILE" />
+                <appender-ref ref="CONSOLE" />
+            </logger>
+        </then>
+        <else>
+            <!-- In Docker/production without control panel, startup messages go to regular logs -->
+            <logger name="app.owlcms.Main.startup" level="INFO" />
+        </else>
+    </if>
 
     <!-- default levels for owlcms -->
     <logger name="app.owlcms" level="INFO" />

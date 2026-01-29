@@ -49,28 +49,39 @@ public final class Main {
 	public static int port = 8090;
 	public static String version;
 	final static Logger logger = (Logger) LoggerFactory.getLogger(Main.class);
+	final static Logger startupLogger = (Logger) LoggerFactory.getLogger(Main.class.getName() + ".startup");
 
 	public static void main(@NotNull String[] args) throws Exception {
+		startupLogger.info("* Starting owlcms-firmata");
 		logVersion();
 		parseOptions(args);
+		
+		startupLogger.info("* Finding available port (starting from {})", port);
 		while (!isTcpPortAvailable(port)) {
 			port++;
 		}
+		startupLogger.info("* Using port {}", port);
+		
+		startupLogger.info("* Loading device configurations");
 		ResourceWalker.checkForLocalOverrideDirectory(() -> populateLocalDirectory());
 		MQTTConfig.getCurrent().readSettings();
+		startupLogger.info("* Configuration loaded");
 
+		startupLogger.info("* Starting web server");
 		var vaadinBoot = new VaadinBoot() {
 			@Override
 			public void run() throws Exception {
 				start();
 				Runtime.getRuntime().addShutdownHook(new Thread(() -> stop("Shutdown hook called, shutting down")));
 				logger.info("Press CTRL+C to shutdown");
-				Open.open(getServerURL());
 			}
 
 			@Override
 			public void onStarted(WebAppContext c) {
 				logger.info("started on port {}", this.getPort());
+				startupLogger.info("* Application ready");
+				startupLogger.info("* Opening browser at {}", getServerURL());
+				Open.open(getServerURL());
 			}
 		};
 		vaadinBoot.setAppName("owlcms-firmata");
@@ -79,7 +90,7 @@ public final class Main {
 	}
 
 	public static Logger getStartupLogger() {
-		return logger;
+		return startupLogger;
 	}
 
 	private static String getDefaultConfigDir() {
