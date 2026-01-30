@@ -50,7 +50,7 @@ jobs:
       - name: Build owlcms-firmata
         env:
           TAG: ${{ inputs.version }}
-        run: mvn -Pproduction -o clean package
+        run: mvn -Pproduction clean package
 
       - name: Prepare release artifact
         run: |
