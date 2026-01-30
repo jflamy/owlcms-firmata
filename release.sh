@@ -7,13 +7,8 @@
 # z > 0 : bug fix release
 export TAG=2.6.0-rc01
 
-# use -alpha00 or -beta00 or -rc00 or empty for final release
-export ALPHA_BETA_RELEASE=-rc01
-
 echo building $TAG
 (cd ../firmata4j; mvn -DskipTests install)
-
-mvn versions:set -DnewVersion=$TAG
 
 # Copy device configuration files into jar resources
 rm -rf src/main/resources/devices
@@ -25,7 +20,6 @@ mvn -Pproduction clean package
 mkdir -p dist/files
 cp target/owlcms-firmata.jar dist/files
 
-git add pom.xml
 git add --all
 git commit -m $TAG
 git push
