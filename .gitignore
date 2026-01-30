@@ -3,6 +3,7 @@
 
 # Log file
 *.log
+logs/
 
 # BlueJ files
 *.ctxt
@@ -49,3 +50,4 @@ config/Referees.xlsx
 config/RefereesDown.xlsx
 config/RefereeSolo.xlsx
 config/Timekeeper.xlsx
+.vaadin-node-tasks.lock

@@ -63,14 +63,14 @@
     <!-- Startup logger - enabled for control panel (writes to startup.log) -->
     <if condition='isDefined("OWLCMS_CONTROLPANEL")'>
         <then>
-            <logger name="app.owlcms.Main.startup" level="INFO" additivity="false">
+            <logger name="app.owlcms.firmata.ui.Main.startup" level="INFO" additivity="false">
                 <appender-ref ref="STARTUP_FILE" />
                 <appender-ref ref="CONSOLE" />
             </logger>
         </then>
         <else>
             <!-- In Docker/production without control panel, startup messages go to regular logs -->
-            <logger name="app.owlcms.Main.startup" level="INFO" />
+            <logger name="app.owlcms.firmata.ui.Main.startup" level="INFO" />
         </else>
     </if>
 

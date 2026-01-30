@@ -22,6 +22,28 @@
       },
       "env": {
       }
+    },
+    {
+      "type": "java",
+      "name": "🔷 firmata (Control Panel Mode)",
+      "request": "launch",
+      "console": "internalConsole",
+      "mainClass": "app.owlcms.firmata.ui.Main",
+      "projectName": "owlcms-firmata",
+      "cwd": "${workspaceFolder}",
+      "vmArgs": "${config:owlcms.vmArgs}",
+      "windows": {
+        "envFile": "${workspaceFolder}\\.vscode\\.env.windows"
+      },
+      "linux": {
+        "envFile": "${workspaceFolder}/.vscode/.env.linux"
+      },
+      "osx": {
+        "envFile": "${workspaceFolder}/.vscode/.env.mac"
+      },
+      "env": {
+        "OWLCMS_CONTROLPANEL": "3.0.4"
+      }
     }
   ]
 }
