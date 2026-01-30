@@ -26,7 +26,8 @@ jobs:
 
       - name: Build with Maven
         run: |
-          ./release.sh
+          chmod +x ./release.sh
+          bash ./release.sh
 
       - name: Upload Release Artifact
         uses: actions/upload-artifact@v4
