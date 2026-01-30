@@ -1,24 +1,50 @@
-##### In this release
+## Instructions for packaging
 
-- 2.5.1: Connections when username/password were configured on owlcms no longer worked in 2.5.0
-  - A wrong password will now interrupt the initial autoconnect correctly and give an opportunity to fix the password
-  - Fixes were applied to both the MQTT protocol (port 1883) and websocket connections as the Paho library reports errors in different ways.
+> **Note:** As of version 2.6+, owlcms-firmata is distributed as a jar file only. The OWLCMS Control Panel (version 3.0+) handles Java runtime management automatically.
 
-- 2.5.0: If the port specified ends with 443, the connection will be done using `wss:` to the /mqtt entry point. This is to support the use of MQTT devices on a cloud server.  If the port starts with 8 the connection will be using `ws:`.  Other ports, like the usual 1883 will use `mqtt`
+### Prerequisites
 
-Since 2.3.0
+1. Checkout the repositories as peers (side-by-side in the same parent directory):
+   ```bash
+   cd ~/git  # or your preferred location
+   git clone https://github.com/owlcms/owlcms-firmata.git
+   git clone https://github.com/jflamy/firmata4j.git
+   cd firmata4j
+   git checkout webserial
+   ```
+   The directory structure should be:
+   ```
+   parent-directory/
+     owlcms-firmata/
+     firmata4j/         # on webserial branch
+   ```
+2. Make sure you have installed Maven (mvn) and that it is on the PATH
+3. Install the GitHub CLI (`gh`) for creating releases
 
-- 2.4.0: Removed unneeded connections established at start-up.  This version should be used for clarity when using owlcms version 61 Connected MQTT devices status reporting.
-- 2.3.3: Show the full path to the device definition files.
-- 2.3.2: Fix subscription issues when Disconnecting and reconnecting to a server with different platform names
-- 2.3.1: Reset the platform list when doing a Disconnect/Connect
-- 2.3.0: Automatic connections
-  - on startup, automatic connection attempted to the last working configuration
-  - if that does not work, scan of the local area network to locate an MQTT server
-  - manual choice remains possible
-  - once a platform is selected, automatic connection to the detected devices
+### Release Process
 
-##### Known issues
+1. Edit the `release.sh` script:
+   - Update the VERSION NUMBER on line 8 (`TAG=x.y.z`)
+   - Set `ALPHA_BETA_RELEASE` on line 11 if needed (e.g., `-rc01` or empty for final)
 
-- If several browsers are run at the same time display between browsers will not be synchronized. Normally only one at a time is needed anyway.
+2. Update the `ReleaseNotes.md` file with changes for this version
 
+3. If device configuration files in `diagrams/` have changed, run:
+   ```bash
+   cd dist && ./syncXLSX.sh
+   ```
+
+4. Open a shell in the repository root and run `./release.sh`
+   - This will compile the firmata4j library
+   - This will compile an "uberjar" archive containing all dependencies
+   - This will create a GitHub release with the jar file
+
+### Development
+
+For local development, device configuration files should be in `src/main/resources/devices/`. 
+These are bundled into the jar and auto-extracted to the user's config directory on first run.
+
+To sync config files from `diagrams/` to resources:
+```bash
+cd dist && ./syncXLSX.sh
+```

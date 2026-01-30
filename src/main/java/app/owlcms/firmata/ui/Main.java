@@ -95,8 +95,9 @@ public final class Main {
 
 	private static String getDefaultConfigDir() {
 		String fs = FileSystems.getDefault().getSeparator();
-		String dirName = (System.getProperty("os.name").startsWith("Windows") ? "owlcms" : ".owlcms");
-		return deviceConfigs = System.getProperty("user.home") + fs + dirName + fs + "devices";
+		// Config is always relative to working directory
+		// Control Panel sets working dir to version directory and handles copying on upgrade
+		return deviceConfigs = "." + fs + "config";
 	}
 
 	private static boolean isTcpPortAvailable(int port) {
