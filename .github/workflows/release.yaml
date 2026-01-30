@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -24,29 +24,33 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      - name: Build with Maven
+      - name: Clone firmata4j
+        run: git clone https://github.com/jflamy/firmata4j ../firmata4j
+
+      - name: Build and install firmata4j
         run: |
-          chmod +x ./release.sh
-          bash ./release.sh
+          cd ../firmata4j
+          mvn -DskipTests install
 
-      - name: Upload Release Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: owlcms-firmata-jar
-          path: dist/files/owlcms-firmata.jar
+      - name: Copy device configs to resources
+        run: |
+          rm -rf src/main/resources/devices
+          mkdir -p src/main/resources/devices
+          find diagrams -name '*.xlsx' -print0 | xargs -0 -I {} cp {} src/main/resources/devices/
 
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: owlcms-firmata-jar
+      - name: Build owlcms-firmata
+        env:
+          TAG: ${{ github.ref_name }}
+        run: mvn -Pproduction clean package
+
+      - name: Prepare release artifact
+        run: |
+          mkdir -p dist/files
+          cp target/owlcms-firmata.jar dist/files
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: owlcms-firmata.jar
+          files: dist/files/owlcms-firmata.jar
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
