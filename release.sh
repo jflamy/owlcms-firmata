@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-VERSION="2.6.0-rc03"
+VERSION="2.6.0"
 set -euo pipefail
 
 # Triggers the GitHub Actions workflow `.github/workflows/release.yaml`
