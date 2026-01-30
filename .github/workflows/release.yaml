@@ -2,6 +2,11 @@ name: Build and Release owlcms-firmata
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 2.6.0-rc01)'
+        required: true
+        type: string
 
 jobs:
   build-and-release:
@@ -29,6 +34,8 @@ jobs:
 
       - name: Build and install firmata4j
         run: |
+          # Remove any cached "not found" marker for firmata4j
+          rm -rf ~/.m2/repository/com/github/kurbatov/firmata4j
           cd ../firmata4j
           mvn -DskipTests install
 
@@ -40,7 +47,7 @@ jobs:
 
       - name: Build owlcms-firmata
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.version }}
         run: mvn -Pproduction clean package
 
       - name: Prepare release artifact
