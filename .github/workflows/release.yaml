@@ -30,7 +30,7 @@ jobs:
             ${{ runner.os }}-maven-
 
       - name: Clone firmata4j
-        run: git clone https://github.com/jflamy/firmata4j ../firmata4j
+        run: git clone --branch webserial https://github.com/jflamy/firmata4j ../firmata4j
 
       - name: Build and install firmata4j
         run: |
