@@ -62,6 +62,7 @@ jobs:
         with:
           tag_name: ${{ inputs.version }}
           name: Release ${{ inputs.version }}
+          body_path: ReleaseNotes.md
           files: dist/files/owlcms-firmata.jar
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
