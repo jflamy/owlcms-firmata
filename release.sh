@@ -1,4 +1,6 @@
 #!/bin/bash
+VERSION="2.6.1"
+TAG="${1:-$VERSION}"
 # =============================================================================
 # Release script for owlcms-firmata
 # Uses workflow_dispatch trigger with version input parameter
@@ -6,6 +8,8 @@
 # =============================================================================
 
 set -e
+
+
 
 # Check for gh CLI
 if ! command -v gh &> /dev/null; then
@@ -19,16 +23,8 @@ if ! gh auth status &> /dev/null; then
     exit 1
 fi
 
-# Get version from argument
-if [[ -z "$1" ]]; then
-    echo "Usage: $0 <version>"
-    echo "Example: $0 2.6.0"
-    exit 1
-fi
-VERSION="$1"
-
 # Validate version format (semver without v prefix)
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-alpha[0-9]*|-beta[0-9]*|-rc[0-9]*)?$ ]]; then
+if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-alpha[0-9]*|-beta[0-9]*|-rc[0-9]*)?$ ]]; then
     echo "Error: Version must be semver format: 1.2.3, 1.2.3-alpha1, 1.2.3-beta1, or 1.2.3-rc1"
     exit 1
 fi
@@ -40,10 +36,52 @@ if [[ "$BRANCH" == "HEAD" ]]; then
     exit 1
 fi
 
+# Auto-commit release metadata updates, but block if unrelated files are dirty
+DIRTY_FILES=$( {
+    git diff --name-only
+    git diff --cached --name-only
+    git ls-files --others --exclude-standard
+} | sort -u )
+
+if [[ -n "$DIRTY_FILES" ]]; then
+    OTHER_DIRTY=$(echo "$DIRTY_FILES" | grep -Ev '^(release\.sh|ReleaseNotes\.md)$' || true)
+    if [[ -n "$OTHER_DIRTY" ]]; then
+        echo "Error: Other files are dirty. Clean or commit these before releasing:"
+        echo "$OTHER_DIRTY"
+        exit 1
+    fi
+
+    git add release.sh ReleaseNotes.md
+    if ! git diff --cached --quiet; then
+        git commit -m "chore: prepare release $TAG"
+        git push origin "$BRANCH"
+    fi
+fi
+
+# Ensure local branch is pushed (workflow_dispatch runs on remote ref)
+git fetch origin "$BRANCH" --quiet
+LOCAL_HEAD=$(git rev-parse HEAD)
+REMOTE_HEAD=$(git rev-parse "origin/$BRANCH")
+if [[ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]]; then
+    echo "Error: Local branch and origin/$BRANCH differ. Push your commits before releasing."
+    echo "Run: git push origin $BRANCH"
+    exit 1
+fi
+
+# Check that the tag does not already exist locally or on the remote
+if git rev-parse "refs/tags/$TAG" &>/dev/null; then
+    echo "Error: Tag '$TAG' already exists locally. Delete it first with: git tag -d $TAG"
+    exit 1
+fi
+if gh release view "$TAG" --repo "owlcms/owlcms-firmata" &>/dev/null; then
+    echo "Error: GitHub release '$TAG' already exists. Delete it first or choose a different version."
+    exit 1
+fi
+
 REPO="owlcms/owlcms-firmata"
 WORKFLOW_FILE="release.yaml"
 
-echo "==== Release $VERSION for $REPO ===="
+echo "==== Release $TAG for $REPO ===="
 echo "Branch: $BRANCH"
 
 # Get the most recent run ID before triggering (for comparison)
@@ -52,8 +90,8 @@ START_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 echo "Previous run ID: $PREV_RUN_ID, Start time: $START_ISO"
 
 # Trigger the workflow
-echo "Triggering workflow dispatch with version=$VERSION on branch $BRANCH..."
-gh workflow run "$WORKFLOW_FILE" --repo "$REPO" --ref "$BRANCH" --field version="$VERSION"
+echo "Triggering workflow dispatch with version=$TAG on branch $BRANCH..."
+gh workflow run "$WORKFLOW_FILE" --repo "$REPO" --ref "$BRANCH" --field version="$TAG"
 
 # Wait for the new run to appear
 echo "Waiting for workflow run to start..."
@@ -86,5 +124,5 @@ echo ""
 gh run watch "$RUN_ID" --repo "$REPO" --exit-status
 
 echo ""
-echo "==== Release $VERSION completed successfully! ===="
-echo "View release at: https://github.com/$REPO/releases/tag/$VERSION"
+echo "==== Release $TAG completed successfully! ===="
+echo "View release at: https://github.com/$REPO/releases/tag/$TAG"

@@ -9,7 +9,10 @@
 <br>
 ##### Release Notes
 
-- 2.6.0
+- 2.6.1
+  - This version fixes the missing release notes
+
+- 2.6.0:
   - This version is installed from the Control Panel version 3.0.4 or more recent
   - There is no longer a separate firmata control panel
 
