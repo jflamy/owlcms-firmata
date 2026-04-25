@@ -27,7 +27,7 @@ fi
 if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-alpha[0-9]*|-beta[0-9]*|-rc[0-9]*)?$ ]]; then
     echo "Error: Version must be semver format: 1.2.3, 1.2.3-alpha1, 1.2.3-beta1, or 1.2.3-rc1"
     exit 1
-fi.
+fi
 
 # Get current branch
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
