@@ -8,8 +8,10 @@
 
 ### Release Notes
 
-- 2.6.2
-  - update the communication library to fix a DLL issue on Windows
+- 2.6.3
+  - update the jSersalComm communication library used in firmata4j to fix a DLL issue on Windows
+- 2.6.2:
+  - incomplete attempt to update jSerialComm
 - 2.6.1
   - No changes in features or behavior. This version fixes the missing release notes and the build process
 
