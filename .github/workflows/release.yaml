@@ -38,8 +38,9 @@ jobs:
           rm -rf ~/.m2/repository/com/github/kurbatov/firmata4j
           cd ../firmata4j
           mvn -DskipTests install
-          # Verify install succeeded
-          ls -la ~/.m2/repository/com/github/kurbatov/firmata4j/2.3.9-owlcms04/
+          # Verify install succeeded (version is read from the firmata4j pom)
+          FIRMATA4J_VERSION=$(mvn -q -Dexec.executable=echo -Dexec.args='${project.version}' --non-recursive exec:exec)
+          ls -la ~/.m2/repository/com/github/kurbatov/firmata4j/"$FIRMATA4J_VERSION"/
 
       - name: Copy device configs to resources
         run: |
