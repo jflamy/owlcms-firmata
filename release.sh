@@ -1,5 +1,5 @@
 #!/bin/bash
-VERSION="2.6.2"
+VERSION="2.6.3-rc01"
 TAG="${1:-$VERSION}"
 # =============================================================================
 # Release script for owlcms-firmata
