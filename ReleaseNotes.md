@@ -8,6 +8,8 @@
 
 ### Release Notes
 
+- 2.6.2
+  - update the communication library to fix a DLL issue on Windows
 - 2.6.1
   - No changes in features or behavior. This version fixes the missing release notes and the build process
 
