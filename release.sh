@@ -74,7 +74,8 @@ if git rev-parse "refs/tags/$TAG" &>/dev/null; then
     exit 1
 fi
 if gh release view "$TAG" --repo "owlcms/owlcms-firmata" &>/dev/null; then
-    echo "Error: GitHub release '$TAG' already exists. Delete it first or choose a different version."
+    echo "Error: Release '$TAG' already exists at https://github.com/owlcms/owlcms-firmata/releases/tag/$TAG"
+    echo "       Delete it first: gh release delete $TAG --repo owlcms/owlcms-firmata --yes"
     exit 1
 fi
 
