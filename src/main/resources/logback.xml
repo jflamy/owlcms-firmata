@@ -60,8 +60,11 @@
         <appender-ref ref="CONSOLE" />
     </root>
     
-    <!-- Startup logger - enabled for control panel (writes to startup.log) -->
-    <if condition='isDefined("OWLCMS_CONTROLPANEL")'>
+    <!-- Startup logger is written to startup.log only when the control panel is present. -->
+    <condition class="ch.qos.logback.core.boolex.IsPropertyDefinedCondition">
+        <key>OWLCMS_CONTROLPANEL</key>
+    </condition>
+    <if>
         <then>
             <logger name="app.owlcms.firmata.ui.Main.startup" level="INFO" additivity="false">
                 <appender-ref ref="STARTUP_FILE" />
@@ -69,7 +72,6 @@
             </logger>
         </then>
         <else>
-            <!-- In Docker/production without control panel, startup messages go to regular logs -->
             <logger name="app.owlcms.firmata.ui.Main.startup" level="INFO" />
         </else>
     </if>
