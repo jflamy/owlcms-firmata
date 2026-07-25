@@ -10,8 +10,6 @@ import com.vaadin.flow.theme.lumo.Lumo;
 // implicit default; loading it explicitly restores the previous appearance.
 @StyleSheet(Lumo.STYLESHEET)
 @CssImport("./styles/shared-styles.css")
-@CssImport(value = "./styles/vaadin-text-field-styles.css", themeFor = "vaadin-text-field")
-@CssImport(value = "./styles/vaadin-radio-group-styles.css", themeFor = "vaadin-radio-group")
 @Push
 public class AppShell implements AppShellConfigurator {
 }

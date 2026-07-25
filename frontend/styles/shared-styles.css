@@ -10,3 +10,9 @@
   max-width: 250px;
 }
 
+/* Radio group validation message. Written as a document-scope rule: shadow-DOM
+   injection through @CssImport(themeFor=...) is deprecated in Vaadin 25. */
+vaadin-radio-group::part(error-message) {
+  color: green;
+}
+
